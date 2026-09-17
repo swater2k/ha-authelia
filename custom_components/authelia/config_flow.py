@@ -40,6 +40,7 @@ from .const import (
     CONF_AGENT_URL,
     CONF_INSTALLED_VERSION,
     CONF_METRICS_PORT,
+    CONF_REPAIR_USERS_WITHOUT_2FA,
     CONF_SCAN_INTERVAL,
     CONF_SERVER_PORT,
     DEFAULT_METRICS_PORT,
@@ -177,6 +178,9 @@ class AutheliaOptionsFlow(OptionsFlowWithReload):
                 .removeprefix("v"),
                 CONF_AGENT_URL: (user_input.get(CONF_AGENT_URL) or "").strip().rstrip("/"),
                 CONF_AGENT_TOKEN: (user_input.get(CONF_AGENT_TOKEN) or "").strip(),
+                CONF_REPAIR_USERS_WITHOUT_2FA: bool(
+                    user_input.get(CONF_REPAIR_USERS_WITHOUT_2FA, True)
+                ),
             }
             if data[CONF_AGENT_URL] and not data[CONF_AGENT_URL].startswith(("http://", "https://")):
                 data[CONF_AGENT_URL] = f"http://{data[CONF_AGENT_URL]}"
@@ -216,6 +220,10 @@ class AutheliaOptionsFlow(OptionsFlowWithReload):
                     CONF_AGENT_TOKEN,
                     description={"suggested_value": opts.get(CONF_AGENT_TOKEN, "")},
                 ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                vol.Optional(
+                    CONF_REPAIR_USERS_WITHOUT_2FA,
+                    default=opts.get(CONF_REPAIR_USERS_WITHOUT_2FA, True),
+                ): bool,
                 vol.Optional(
                     CONF_INSTALLED_VERSION,
                     description={"suggested_value": opts.get(CONF_INSTALLED_VERSION, "")},

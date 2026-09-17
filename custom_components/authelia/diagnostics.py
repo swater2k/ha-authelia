@@ -70,6 +70,17 @@ def _agent_diagnostics(agent: Any) -> dict[str, Any] | None:
             "second_factor": {
                 k: len(v or []) for k, v in a.second_factor.items()
             },
+            "users": {
+                "supported": a.users.get("supported"),
+                "error": a.users.get("error"),
+                "backend": a.users.get("backend"),
+                "total": len(a.user_list()),
+                "without_2fa": len(a.users_without_2fa()),
+                "legacy_hash": len(a.users_with_legacy_hash()),
+                "groups": len(a.users.get("groups") or {}),
+                "hash_algorithms": sorted({u.get("password_algorithm") for u in a.user_list()}),
+            },
+            "config": a.config,  # nur Allow-List-Werte, keine Secrets
         }
     )
     return result

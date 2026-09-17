@@ -52,6 +52,43 @@ SUMMARY = {
 }
 
 
+SUMMARY["users"] = {
+    "supported": True,
+    "backend": "file",
+    "users": [
+        {"username": "anna", "displayname": "Anna", "groups": ["family"], "disabled": False,
+         "has_email": True, "password_algorithm": "argon2id", "legacy_password_hash": False,
+         "has_totp": False, "webauthn_credentials": 0, "passkeys": 0, "has_duo": False,
+         "has_second_factor": False},
+        {"username": "gast", "displayname": "Gast", "groups": [], "disabled": True,
+         "has_email": False, "password_algorithm": "sha512crypt", "legacy_password_hash": True,
+         "has_totp": False, "webauthn_credentials": 0, "passkeys": 0, "has_duo": False,
+         "has_second_factor": False},
+        {"username": "micha", "displayname": "Micha", "groups": ["admins"], "disabled": False,
+         "has_email": True, "password_algorithm": "argon2id", "legacy_password_hash": False,
+         "has_totp": True, "webauthn_credentials": 1, "passkeys": 1, "has_duo": False,
+         "has_second_factor": True},
+    ],
+    "groups": {"admins": ["micha"], "family": ["anna"]},
+}
+SUMMARY["config"] = {
+    "supported": True,
+    "access_control": {"default_policy": "deny", "rules": 5,
+                       "rules_by_policy": {"two_factor": 4, "bypass": 1}},
+    "regulation": {"max_retries": 3, "find_time": "2m", "ban_time": "5m", "modes": ["user", "ip"]},
+    "session": {"expiration": "1h", "inactivity": "5m", "remember_me": "1M", "cookie_domains": 2},
+    "password_policy": {"standard": False, "zxcvbn": True},
+    "authentication_backend": {"type": "file", "password_reset_disabled": False,
+                               "password_change_disabled": False},
+    "second_factor": {"totp_disabled": False, "webauthn_disabled": False, "passkey_login": True},
+    "notifier": "smtp",
+    "notifier_startup_check_disabled": False,
+    "storage": "local",
+    "telemetry_metrics": True,
+    "log_level": "info",
+}
+
+
 def _summary_with_new_activity() -> dict:
     data = copy.deepcopy(SUMMARY)
     data["logins"]["latest_id"] = 100
@@ -226,5 +263,101 @@ async def test_diagnostics_redacts_agent(hass: HomeAssistant, mock_authelia, age
     diag = await async_get_config_entry_diagnostics(hass, agent_entry)
     assert diag["entry"]["options"]["agent_token"] == "**REDACTED**"
     assert diag["agent"]["active_bans"] == {"users": 0, "ips": 0}
+    assert diag["agent"]["users"]["total"] == 3
+    assert diag["agent"]["config"]["access_control"]["default_policy"] == "deny"
     text = str(diag)
-    assert "micha" not in text and "203.0.113.7" not in text
+    assert "micha" not in text and "anna" not in text and "203.0.113.7" not in text
+
+
+async def test_users_config_and_repairs(hass: HomeAssistant, mock_authelia, agent_entry) -> None:
+    from homeassistant.helpers import issue_registry as ir
+
+    mock_authelia.get(SUMMARY_URL, json=SUMMARY)
+    agent_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(agent_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.authelia_users").state == "3"
+    no2fa = hass.states.get("sensor.authelia_users_without_2fa")
+    assert no2fa.state == "1" and no2fa.attributes["users"] == ["anna"]  # gast ist deaktiviert
+    assert hass.states.get("sensor.authelia_disabled_users").state == "1"
+    assert hass.states.get("sensor.authelia_users_with_legacy_password_hash").state == "0"
+    assert hass.states.get("sensor.authelia_default_policy").state == "deny"
+    assert hass.states.get("sensor.authelia_bypass_rules").state == "1"
+    reg = hass.states.get("sensor.authelia_regulation_max_retries")
+    assert reg.state == "3" and reg.attributes["ban_time"] == "5m"
+    assert hass.states.get("sensor.authelia_password_policy").state == "zxcvbn"
+    assert hass.states.get("sensor.authelia_groups").attributes["groups"]["admins"] == ["micha"]
+
+    issues = ir.async_get(hass)
+    eid = agent_entry.entry_id
+    issue = issues.async_get_issue(DOMAIN, f"users_without_2fa_{eid}")
+    assert issue is not None and issue.translation_placeholders["users"] == "anna"
+    assert issues.async_get_issue(DOMAIN, f"default_policy_not_deny_{eid}") is None
+    assert issues.async_get_issue(DOMAIN, f"legacy_password_hash_{eid}") is None
+    assert issues.async_get_issue(DOMAIN, f"webauthn_clone_warning_{eid}") is None
+
+    # Problem behoben + neue Probleme -> Hinweise passen sich an
+    fixed = copy.deepcopy(SUMMARY)
+    fixed["users"]["users"][0]["has_second_factor"] = True
+    fixed["users"]["users"][0]["legacy_password_hash"] = True
+    fixed["config"]["access_control"]["default_policy"] = "one_factor"
+    fixed["second_factor"]["webauthn"][0]["clone_warning"] = True
+    mock_authelia.clear_requests()
+    mock_authelia.get(f"http://{HOST}:9959/metrics", text=REAL_METRICS)
+    mock_authelia.get(SUMMARY_URL, json=fixed)
+    await agent_entry.runtime_data.agent.async_refresh()
+    await hass.async_block_till_done()
+
+    assert issues.async_get_issue(DOMAIN, f"users_without_2fa_{eid}") is None
+    assert issues.async_get_issue(DOMAIN, f"legacy_password_hash_{eid}") is not None
+    policy = issues.async_get_issue(DOMAIN, f"default_policy_not_deny_{eid}")
+    assert policy.translation_placeholders["policy"] == "one_factor"
+    clone = issues.async_get_issue(DOMAIN, f"webauthn_clone_warning_{eid}")
+    assert clone.severity is ir.IssueSeverity.ERROR
+    assert clone.translation_placeholders["credentials"] == "micha (YubiKey)"
+    assert hass.states.get("binary_sensor.authelia_webauthn_clone_warning").state == "on"
+
+    # Token abgelehnt -> Hinweis, bestehende Hinweise bleiben
+    mock_authelia.clear_requests()
+    mock_authelia.get(SUMMARY_URL, status=401, json={"error": "unauthorized"})
+    await agent_entry.runtime_data.agent.async_refresh()
+    await hass.async_block_till_done()
+    assert issues.async_get_issue(DOMAIN, f"agent_auth_failed_{eid}") is not None
+    assert issues.async_get_issue(DOMAIN, f"legacy_password_hash_{eid}") is not None
+
+    # Entladen räumt auf
+    assert await hass.config_entries.async_unload(eid)
+    assert issues.async_get_issue(DOMAIN, f"agent_auth_failed_{eid}") is None
+    assert issues.async_get_issue(DOMAIN, f"legacy_password_hash_{eid}") is None
+
+
+async def test_repair_users_without_2fa_can_be_disabled(
+    hass: HomeAssistant, mock_authelia, agent_entry
+) -> None:
+    from homeassistant.helpers import issue_registry as ir
+
+    mock_authelia.get(SUMMARY_URL, json=SUMMARY)
+    agent_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        agent_entry, options={**agent_entry.options, "repair_users_without_2fa": False}
+    )
+    assert await hass.config_entries.async_setup(agent_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.authelia_users_without_2fa").state == "1"
+    assert ir.async_get(hass).async_get_issue(
+        DOMAIN, f"users_without_2fa_{agent_entry.entry_id}"
+    ) is None
+
+
+async def test_agent_without_yaml(hass: HomeAssistant, mock_authelia, agent_entry) -> None:
+    data = copy.deepcopy(SUMMARY)
+    data["users"] = {"supported": False, "error": "pyyaml_missing"}
+    data["config"] = {"supported": False, "error": "pyyaml_missing"}
+    mock_authelia.get(SUMMARY_URL, json=data)
+    agent_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(agent_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.authelia_users").state == "unknown"
+    assert hass.states.get("sensor.authelia_default_policy").state == "unknown"
+    assert hass.states.get("sensor.authelia_active_user_bans").state == "0"

@@ -84,4 +84,5 @@ async def test_options(hass: HomeAssistant, mock_authelia, config_entry) -> None
         "installed_version": "4.39.26",
         "agent_url": "",
         "agent_token": "",
+        "repair_users_without_2fa": True,
     }

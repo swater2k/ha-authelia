@@ -58,13 +58,15 @@
           "scan_interval": "Abfrageintervall",
           "installed_version": "Installierte Authelia-Version",
           "agent_url": "Agent-URL",
-          "agent_token": "Agent-Token"
+          "agent_token": "Agent-Token",
+          "repair_users_without_2fa": "Warnung bei Benutzern ohne 2FA"
         },
         "data_description": {
           "scan_interval": "Für Metriken und Health-Check.",
           "installed_version": "Nur ohne Agent nötig, z. B. 4.39.27. Aktiviert die Update-Entity.",
           "agent_url": "Optional. URL des Authelia HA Agent, z. B. http://192.168.1.10:9960. Ergänzt Sperren, Anmeldeverlauf mit Benutzer und IP sowie 2FA-Geräte.",
-          "agent_token": "Token aus der Ausgabe des Agent-Installers."
+          "agent_token": "Token aus der Ausgabe des Agent-Installers.",
+          "repair_users_without_2fa": "Legt einen Reparatur-Hinweis an, wenn aktive Benutzer keinen zweiten Faktor haben (erfordert den Agent)."
         }
       }
     },
@@ -227,6 +229,56 @@
       },
       "schema_version": {
         "name": "Datenbank-Schemaversion"
+      },
+      "users_total": {
+        "name": "Benutzer"
+      },
+      "users_without_2fa": {
+        "name": "Benutzer ohne 2FA"
+      },
+      "users_disabled": {
+        "name": "Deaktivierte Benutzer"
+      },
+      "users_legacy_password_hash": {
+        "name": "Benutzer mit veraltetem Passwort-Hash"
+      },
+      "users_without_email": {
+        "name": "Benutzer ohne E-Mail"
+      },
+      "user_groups": {
+        "name": "Gruppen"
+      },
+      "default_policy": {
+        "name": "Standard-Richtlinie",
+        "state": {
+          "deny": "Verweigern",
+          "one_factor": "Ein Faktor",
+          "two_factor": "Zwei Faktoren",
+          "bypass": "Ohne Anmeldung"
+        }
+      },
+      "access_control_rules": {
+        "name": "Zugriffsregeln"
+      },
+      "bypass_rules": {
+        "name": "Bypass-Regeln"
+      },
+      "regulation_max_retries": {
+        "name": "Sperre nach Fehlversuchen"
+      },
+      "session_expiration": {
+        "name": "Sitzungsdauer"
+      },
+      "password_policy": {
+        "name": "Passwort-Richtlinie",
+        "state": {
+          "zxcvbn": "zxcvbn",
+          "standard": "Standard",
+          "disabled": "Deaktiviert"
+        }
+      },
+      "notifier": {
+        "name": "Benachrichtigungsdienst"
       }
     },
     "binary_sensor": {
@@ -265,6 +317,28 @@
           }
         }
       }
+    }
+  },
+  "issues": {
+    "agent_auth_failed": {
+      "title": "Authelia-Agent lehnt das Token ab",
+      "description": "Der Datenbank-Agent von **{title}** lehnt das hinterlegte Token ab. Sperren, Anmeldeverlauf, Benutzer und Konfiguration werden nicht aktualisiert.\n\nToken auf dem Authelia-Host mit `grep AGENT_TOKEN /etc/authelia-ha-agent/agent.env` prüfen und unter **Einstellungen → Geräte & Dienste → Authelia → Konfigurieren** aktualisieren."
+    },
+    "users_without_2fa": {
+      "title": "Authelia-Benutzer ohne zweiten Faktor",
+      "description": "Diese aktiven Benutzer von **{title}** haben weder TOTP, WebAuthn noch Duo registriert: **{users}**.\n\nSie erreichen nur Ressourcen mit `one_factor`-Richtlinie – oder registrieren beim ersten Zugriff auf eine `two_factor`-Ressource einen zweiten Faktor. Das kann jeder, der das Passwort kennt. Registriere für diese Benutzer einen zweiten Faktor.\n\nDiese Warnung lässt sich in den Optionen der Integration abschalten."
+    },
+    "legacy_password_hash": {
+      "title": "Authelia-Benutzer mit veraltetem Passwort-Hash",
+      "description": "Diese Benutzer von **{title}** verwenden ein nicht mehr empfohlenes Hash-Verfahren: **{users}**.\n\nErzeuge mit `authelia crypto hash generate argon2` einen neuen Hash und ersetze ihn in der Benutzerdatenbank."
+    },
+    "default_policy_not_deny": {
+      "title": "Authelia-Standard-Richtlinie ist nicht „deny“",
+      "description": "Die `access_control.default_policy` von **{title}** ist `{policy}`. Anfragen, auf die keine Regel passt, werden damit nicht abgelehnt.\n\nSetze `default_policy: 'deny'` und erlaube Zugriffe gezielt über Regeln."
+    },
+    "webauthn_clone_warning": {
+      "title": "Möglicherweise geklonter WebAuthn-Schlüssel",
+      "description": "Authelia hat diese WebAuthn-Schlüssel von **{title}** markiert, weil ihr Signaturzähler zurückgesprungen ist: **{credentials}**.\n\nDas kann auf einen geklonten Sicherheitsschlüssel hindeuten. Prüfe das Gerät mit dem Besitzer, entferne den Schlüssel in Authelia und registriere ihn neu."
     }
   }
 }

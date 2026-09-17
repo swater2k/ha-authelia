@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Installs or updates the Authelia HA Agent inside the Authelia host/LXC.
-# Usage: bash install.sh [--port 9960] [--db /etc/authelia/db.sqlite3] [--rotate-token]
+# Usage: bash install.sh [--port 9960] [--db /etc/authelia/db.sqlite3]
+#                        [--config /etc/authelia/configuration.yml] [--rotate-token]
 set -euo pipefail
 
 PORT=9960
 DB=/etc/authelia/db.sqlite3
+CONFIG=/etc/authelia/configuration.yml
 ROTATE=0
 REPO_RAW="https://raw.githubusercontent.com/swater2k/ha-authelia/main/agent"
 
@@ -12,6 +14,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
     --db) DB="$2"; shift 2 ;;
+    --config) CONFIG="$2"; shift 2 ;;
     --rotate-token) ROTATE=1; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -22,6 +25,15 @@ command -v python3 >/dev/null || { echo "python3 is required." >&2; exit 1; }
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
   || { echo "Python >= 3.11 is required." >&2; exit 1; }
 [[ -f "$DB" ]] || { echo "Authelia database not found: $DB" >&2; exit 1; }
+
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  if command -v apt-get >/dev/null; then
+    echo "Installing python3-yaml (needed for users and configuration)..."
+    apt-get update -qq && apt-get install -y -qq python3-yaml
+  else
+    echo "Warning: python3-yaml missing – users and configuration will be unavailable." >&2
+  fi
+fi
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/nonexistent/x}")" 2>/dev/null && pwd || echo /nonexistent)"
 install -d -m 0755 /opt/authelia-ha-agent
@@ -47,6 +59,7 @@ AGENT_TOKEN=$TOKEN
 AGENT_BIND=0.0.0.0
 AGENT_PORT=$PORT
 AUTHELIA_DB=$DB
+AUTHELIA_CONFIG=$CONFIG
 AUTHELIA_BIN=$(command -v authelia || true)
 ENV
   NEW_TOKEN=1

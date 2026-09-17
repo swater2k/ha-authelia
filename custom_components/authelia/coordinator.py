@@ -296,6 +296,29 @@ class AgentData:
         return self.summary.get("authelia_version")
 
     @property
+    def users(self) -> dict[str, Any]:
+        return self.summary.get("users") or {}
+
+    @property
+    def config(self) -> dict[str, Any]:
+        return self.summary.get("config") or {}
+
+    def user_list(self) -> list[dict[str, Any]]:
+        return self.users.get("users") or [] if self.users.get("supported") else []
+
+    def active_users(self) -> list[dict[str, Any]]:
+        return [u for u in self.user_list() if not u.get("disabled")]
+
+    def users_without_2fa(self) -> list[str]:
+        return [u["username"] for u in self.active_users() if not u.get("has_second_factor")]
+
+    def users_with_legacy_hash(self) -> list[str]:
+        return [u["username"] for u in self.active_users() if u.get("legacy_password_hash")]
+
+    def clone_warnings(self) -> list[dict[str, Any]]:
+        return [c for c in self.second_factor.get("webauthn") or [] if c.get("clone_warning")]
+
+    @property
     def last_24h(self) -> dict[str, Any]:
         return self.logins.get("last_24h") or {}
 
@@ -345,6 +368,7 @@ class AutheliaAgentCoordinator(DataUpdateCoordinator[AgentData]):
             update_interval=timedelta(seconds=interval),
         )
         self.client = client
+        self.auth_failed = False
         self._since_id: int | None = None
         self._known_bans: set[str] | None = None
 
@@ -352,9 +376,11 @@ class AutheliaAgentCoordinator(DataUpdateCoordinator[AgentData]):
         try:
             summary = await self.client.fetch_summary(self._since_id)
         except AutheliaAgentAuthError as err:
+            self.auth_failed = True
             raise UpdateFailed(f"{err} – Token in den Optionen prüfen") from err
         except AutheliaError as err:
             raise UpdateFailed(str(err)) from err
+        self.auth_failed = False
         return self._process(summary)
 
     def _process(self, summary: dict[str, Any]) -> AgentData:

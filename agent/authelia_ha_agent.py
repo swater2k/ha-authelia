@@ -6,11 +6,13 @@ Runs next to Authelia, opens the SQLite storage database strictly read-only and
 exposes selected, non-secret data as JSON:
 
     GET /health            -> liveness, no authentication
-    GET /api/v1/summary    -> bans, login history, 2FA devices, version
+    GET /api/v1/summary    -> bans, login history, 2FA devices, users,
+                              security configuration, version
                               (Bearer token, optional ?since_id=<int>)
 
 Never returned: TOTP secrets, WebAuthn public keys/attestations, request URIs,
-OAuth2/OIDC sessions, identity verification tokens.
+OAuth2/OIDC sessions, identity verification tokens, password hashes, e-mail
+addresses, secrets or any configuration value outside an explicit allow-list.
 
 Standard library only (Python >= 3.11). Configuration via environment:
 
@@ -19,6 +21,8 @@ Standard library only (Python >= 3.11). Configuration via environment:
     AGENT_PORT         default 9960
     AUTHELIA_DB        default /etc/authelia/db.sqlite3
     AUTHELIA_BIN       default: "authelia" from PATH
+    AUTHELIA_CONFIG    default /etc/authelia/configuration.yml
+                       (users and configuration require python3-yaml)
     AGENT_TLS_CERT     optional, PEM certificate -> serve HTTPS
     AGENT_TLS_KEY      optional, PEM private key
     AGENT_HISTORY_MAX  default 5000, rows scanned for 24 h aggregates
@@ -44,7 +48,7 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "1.1.0"
 API_VERSION = 1
 MAX_EVENTS = 200
 VERSION_CACHE_SECONDS = 300
@@ -119,6 +123,7 @@ class Settings:
     port: int = 9960
     db_path: str = "/etc/authelia/db.sqlite3"
     authelia_bin: str | None = None
+    config_path: str = "/etc/authelia/configuration.yml"
     tls_cert: str | None = None
     tls_key: str | None = None
     history_max: int = 5000
@@ -134,6 +139,7 @@ class Settings:
             port=int(os.environ.get("AGENT_PORT", "9960")),
             db_path=os.environ.get("AUTHELIA_DB", "/etc/authelia/db.sqlite3"),
             authelia_bin=os.environ.get("AUTHELIA_BIN") or shutil.which("authelia"),
+            config_path=os.environ.get("AUTHELIA_CONFIG", "/etc/authelia/configuration.yml"),
             tls_cert=os.environ.get("AGENT_TLS_CERT") or None,
             tls_key=os.environ.get("AGENT_TLS_KEY") or None,
             history_max=int(os.environ.get("AGENT_HISTORY_MAX", "5000")),
@@ -384,6 +390,242 @@ class AutheliaStore:
         return result
 
 
+# --------------------------------------------------------------------------- #
+# Users and security configuration (YAML)
+# --------------------------------------------------------------------------- #
+
+try:  # optional dependency: python3-yaml
+    import yaml as _yaml
+except ImportError:  # pragma: no cover - depends on host
+    _yaml = None
+
+
+_HASH_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("$argon2id$", "argon2id"),
+    ("$argon2i$", "argon2i"),
+    ("$argon2d$", "argon2d"),
+    ("$scrypt$", "scrypt"),
+    ("$pbkdf2-sha512$", "pbkdf2-sha512"),
+    ("$pbkdf2-sha256$", "pbkdf2-sha256"),
+    ("$pbkdf2-sha1$", "pbkdf2-sha1"),
+    ("$pbkdf2$", "pbkdf2"),
+    ("$2a$", "bcrypt"),
+    ("$2b$", "bcrypt"),
+    ("$2y$", "bcrypt"),
+    ("$6$", "sha512crypt"),
+    ("$5$", "sha256crypt"),
+    ("$1$", "md5crypt"),
+)
+RECOMMENDED_HASHES = frozenset({"argon2id", "scrypt", "pbkdf2-sha512", "bcrypt"})
+
+
+def hash_algorithm(value: Any) -> str:
+    """Only the algorithm of a password hash – the hash itself is never exposed."""
+    text = str(value or "")
+    for prefix, name in _HASH_PREFIXES:
+        if text.startswith(prefix):
+            return name
+    return "unknown" if text else "none"
+
+
+def _get(data: Any, *path: str) -> Any:
+    for key in path:
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data
+
+
+def _scalar(value: Any) -> Any:
+    """Allow-listed values must be plain scalars; templates/objects are dropped."""
+    if isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        return None if "{{" in value else value
+    return None
+
+
+class YamlFile:
+    """Loads a YAML file and caches it by modification time."""
+
+    def __init__(self) -> None:
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._lock = threading.Lock()
+
+    def load(self, path: str) -> Any:
+        if _yaml is None:
+            raise RuntimeError("pyyaml_missing")
+        mtime = os.stat(path).st_mtime
+        with self._lock:
+            cached = self._cache.get(path)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            with open(path, encoding="utf-8") as handle:
+                data = _yaml.safe_load(handle) or {}
+            self._cache[path] = (mtime, data)
+            return data
+
+
+class AutheliaConfigReader:
+    """Reads Authelia's configuration and file user database (allow-listed)."""
+
+    def __init__(self, config_path: str, yaml_file: YamlFile | None = None) -> None:
+        self.config_path = config_path
+        self._yaml = yaml_file or YamlFile()
+
+    def read(self, second_factor: dict[str, Any]) -> dict[str, Any]:
+        try:
+            config = self._yaml.load(self.config_path)
+        except FileNotFoundError:
+            unsupported = {"supported": False, "error": "config_not_found"}
+            return {"users": unsupported, "config": unsupported}
+        except RuntimeError as err:
+            unsupported = {"supported": False, "error": str(err)}
+            return {"users": unsupported, "config": unsupported}
+        except Exception as err:
+            _LOGGER.warning("Could not parse %s: %s", self.config_path, err)
+            unsupported = {"supported": False, "error": "config_invalid"}
+            return {"users": unsupported, "config": unsupported}
+        return {
+            "users": self._users(config, second_factor),
+            "config": self._config(config),
+        }
+
+    # -- users ------------------------------------------------------------- #
+
+    def _users(self, config: dict[str, Any], second_factor: dict[str, Any]) -> dict[str, Any]:
+        backend = _get(config, "authentication_backend")
+        if isinstance(backend, dict) and "ldap" in backend:
+            return {"supported": False, "backend": "ldap", "error": "ldap_not_supported"}
+        path = _get(config, "authentication_backend", "file", "path")
+        if not isinstance(path, str) or "{{" in path:
+            return {"supported": False, "backend": "file", "error": "users_path_unknown"}
+        try:
+            data = self._yaml.load(path)
+        except FileNotFoundError:
+            return {"supported": False, "backend": "file", "error": "users_not_found"}
+        except Exception as err:
+            _LOGGER.warning("Could not parse %s: %s", path, err)
+            return {"supported": False, "backend": "file", "error": "users_invalid"}
+
+        totp_users = {t["username"] for t in second_factor.get("totp") or []}
+        webauthn: dict[str, list[dict[str, Any]]] = {}
+        for cred in second_factor.get("webauthn") or []:
+            webauthn.setdefault(cred["username"], []).append(cred)
+        duo_users = {d["username"] for d in second_factor.get("duo") or []}
+
+        users: list[dict[str, Any]] = []
+        groups: dict[str, list[str]] = {}
+        raw_users = _get(data, "users")
+        for username, attrs in (raw_users or {}).items() if isinstance(raw_users, dict) else []:
+            attrs = attrs if isinstance(attrs, dict) else {}
+            user_groups = [str(g) for g in attrs.get("groups") or [] if isinstance(g, str | int)]
+            for group in user_groups:
+                groups.setdefault(group, []).append(str(username))
+            creds = webauthn.get(str(username), [])
+            algorithm = hash_algorithm(attrs.get("password"))
+            has_totp = str(username) in totp_users
+            has_duo = str(username) in duo_users
+            users.append(
+                {
+                    "username": str(username),
+                    "displayname": _scalar(attrs.get("displayname")),
+                    "disabled": bool(attrs.get("disabled", False)),
+                    "groups": user_groups,
+                    "has_email": bool(attrs.get("email")),
+                    "password_algorithm": algorithm,
+                    "legacy_password_hash": algorithm not in RECOMMENDED_HASHES,
+                    "has_totp": has_totp,
+                    "webauthn_credentials": len(creds),
+                    "passkeys": sum(1 for c in creds if c.get("passkey")),
+                    "has_duo": has_duo,
+                    "has_second_factor": has_totp or bool(creds) or has_duo,
+                }
+            )
+        users.sort(key=lambda u: u["username"])
+        return {
+            "supported": True,
+            "backend": "file",
+            "users": users,
+            "groups": {g: sorted(m) for g, m in sorted(groups.items())},
+        }
+
+    # -- configuration ----------------------------------------------------- #
+
+    @staticmethod
+    def _config(config: dict[str, Any]) -> dict[str, Any]:
+        rules = _get(config, "access_control", "rules")
+        rules = rules if isinstance(rules, list) else []
+        policies: dict[str, int] = {}
+        for rule in rules:
+            policy = str(rule.get("policy", "unknown")) if isinstance(rule, dict) else "unknown"
+            policies[policy] = policies.get(policy, 0) + 1
+
+        backend = _get(config, "authentication_backend")
+        storage = _get(config, "storage")
+        notifier = _get(config, "notifier")
+        session_cookies = _get(config, "session", "cookies")
+        has_cookies = isinstance(session_cookies, list) and session_cookies
+        first_cookie = session_cookies[0] if has_cookies else {}
+
+        def session_value(key: str) -> Any:
+            value = _get(first_cookie, key) if isinstance(first_cookie, dict) else None
+            return _scalar(value if value is not None else _get(config, "session", key))
+
+        def first_key(section: Any, candidates: tuple[str, ...]) -> str | None:
+            if not isinstance(section, dict):
+                return None
+            return next((c for c in candidates if c in section), None)
+
+        return {
+            "supported": True,
+            "access_control": {
+                "default_policy": _scalar(_get(config, "access_control", "default_policy")),
+                "rules": len(rules),
+                "rules_by_policy": policies,
+            },
+            "regulation": {
+                "max_retries": _scalar(_get(config, "regulation", "max_retries")),
+                "find_time": _scalar(_get(config, "regulation", "find_time")),
+                "ban_time": _scalar(_get(config, "regulation", "ban_time")),
+                "modes": [
+                    str(m) for m in _get(config, "regulation", "modes") or [] if isinstance(m, str)
+                ],
+            },
+            "session": {
+                "expiration": session_value("expiration"),
+                "inactivity": session_value("inactivity"),
+                "remember_me": session_value("remember_me"),
+                "cookie_domains": len(session_cookies) if isinstance(session_cookies, list) else 0,
+            },
+            "password_policy": {
+                "standard": bool(_get(config, "password_policy", "standard", "enabled")),
+                "zxcvbn": bool(_get(config, "password_policy", "zxcvbn", "enabled")),
+            },
+            "authentication_backend": {
+                "type": first_key(backend, ("file", "ldap")),
+                "password_reset_disabled": bool(
+                    _get(config, "authentication_backend", "password_reset", "disable")
+                ),
+                "password_change_disabled": bool(
+                    _get(config, "authentication_backend", "password_change", "disable")
+                ),
+            },
+            "second_factor": {
+                "totp_disabled": bool(_get(config, "totp", "disable")),
+                "webauthn_disabled": bool(_get(config, "webauthn", "disable")),
+                "passkey_login": bool(_get(config, "webauthn", "enable_passkey_login")),
+            },
+            "notifier": first_key(notifier, ("smtp", "filesystem")),
+            "notifier_startup_check_disabled": bool(
+                _get(config, "notifier", "disable_startup_check")
+            ),
+            "storage": first_key(storage, ("local", "postgres", "mysql")),
+            "telemetry_metrics": bool(_get(config, "telemetry", "metrics", "enabled")),
+            "log_level": _scalar(_get(config, "log", "level")),
+        }
+
+
 class VersionProbe:
     """Runs ``authelia --version`` with caching."""
 
@@ -428,6 +670,7 @@ class AgentHandler(BaseHTTPRequestHandler):
     settings: Settings
     store: AutheliaStore
     version_probe: VersionProbe
+    config_reader: AutheliaConfigReader
 
     def log_message(self, fmt: str, *args: Any) -> None:
         _LOGGER.debug("%s - %s", self.address_string(), fmt % args)
@@ -469,6 +712,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
         try:
             data = self.store.summary(since_id)
+            data.update(self.config_reader.read(data["second_factor"]))
         except sqlite3.Error as err:
             _LOGGER.error("Database error: %s", err)
             self._send(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "database", "detail": str(err)})
@@ -494,6 +738,7 @@ def make_server(settings: Settings) -> ThreadingHTTPServer:
             "settings": settings,
             "store": AutheliaStore(settings.db_path, settings.history_max),
             "version_probe": VersionProbe(settings.authelia_bin),
+            "config_reader": AutheliaConfigReader(settings.config_path),
         },
     )
     server = ThreadingHTTPServer((settings.bind, settings.port), handler)

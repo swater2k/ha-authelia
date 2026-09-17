@@ -14,6 +14,7 @@ CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_INSTALLED_VERSION: Final = "installed_version"
 CONF_AGENT_URL: Final = "agent_url"
 CONF_AGENT_TOKEN: Final = "agent_token"
+CONF_REPAIR_USERS_WITHOUT_2FA: Final = "repair_users_without_2fa"
 
 DEFAULT_AGENT_PORT: Final = 9960
 AGENT_API_VERSION: Final = 1

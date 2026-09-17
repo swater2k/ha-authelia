@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_SSL, CONF_VERIFY_SSL, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import AutheliaAgentClient, AutheliaClient
@@ -92,9 +92,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutheliaConfigEntry) -> 
         await agent.async_refresh()
 
     entry.runtime_data = AutheliaRuntimeData(client, metrics, health, release, agent)
+
+    if agent is not None:
+        from .issues import async_update_issues
+
+        @callback
+        def _update_issues() -> None:
+            async_update_issues(hass, entry, agent)
+
+        entry.async_on_unload(agent.async_add_listener(_update_issues))
+        _update_issues()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: AutheliaConfigEntry) -> bool:
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    from .issues import async_remove_issues
+
+    if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        async_remove_issues(hass, entry)
+    return unloaded

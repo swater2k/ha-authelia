@@ -152,7 +152,9 @@ def test_database_is_read_only(db: Path) -> None:
 
 @pytest.fixture
 def server(db: Path, socket_enabled):
-    srv = make_server(Settings(token=TOKEN, bind="127.0.0.1", port=0, db_path=str(db)))
+    srv = make_server(
+        Settings(token=TOKEN, bind="127.0.0.1", port=0, db_path=str(db), config_path=str(db) + ".missing.yml")
+    )
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{srv.server_address[1]}"
@@ -179,6 +181,7 @@ def test_http_auth_and_summary(server: str) -> None:
     status, body = _get(f"{server}/api/v1/summary?since_id=5", TOKEN)
     assert status == 200
     assert body["api_version"] == 1
+    assert body["users"] == {"supported": False, "error": "config_not_found"}
     assert [e["id"] for e in body["logins"]["events"]] == [6]
     assert _get(f"{server}/nope", TOKEN)[0] == 404
 
@@ -187,3 +190,183 @@ def test_token_too_short(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_TOKEN", "short")
     with pytest.raises(SystemExit):
         Settings.from_env()
+
+
+# --------------------------------------------------------------------------- #
+# Benutzer und Konfiguration
+# --------------------------------------------------------------------------- #
+
+from agent.authelia_ha_agent import AutheliaConfigReader, hash_algorithm  # noqa: E402
+
+USERS_YML = """
+users:
+  micha:
+    disabled: false
+    displayname: 'Micha'
+    password: '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA'
+    email: 'micha@example.com'
+    given_name: 'Micha'
+    family_name: 'R'
+    locale: 'de-DE'
+    groups: ['admins', 'dev']
+  anna:
+    displayname: 'Anna'
+    password: '$6$rounds=50000$salt$hash'
+    email: 'anna@example.com'
+    groups: ['family']
+  gast:
+    displayname: 'Gast'
+    password: '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA'
+    email: ''
+    disabled: true
+    groups: []
+"""
+
+CONFIG_YML = """
+log:
+  level: 'info'
+telemetry:
+  metrics:
+    enabled: true
+totp:
+  issuer: 'robben.tech'
+webauthn:
+  disable: false
+  enable_passkey_login: true
+session:
+  secret: 'SUPER-SECRET-DO-NOT-LEAK'
+  inactivity: '5m'
+  cookies:
+    - domain: 'robben.tech'
+      authelia_url: 'https://auth.robben.tech'
+      expiration: '1h'
+      remember_me: '1M'
+regulation:
+  max_retries: 3
+  find_time: '2m'
+  ban_time: '5m'
+  modes: ['user', 'ip']
+authentication_backend:
+  password_reset:
+    disable: false
+  file:
+    path: '{users}'
+password_policy:
+  zxcvbn:
+    enabled: true
+access_control:
+  default_policy: 'deny'
+  rules:
+    - domain: 'ha.robben.tech'
+      policy: 'two_factor'
+    - domain: 'public.robben.tech'
+      policy: 'bypass'
+    - domain: 'pbs.robben.dev'
+      policy: 'two_factor'
+storage:
+  encryption_key: 'ANOTHER-SECRET'
+  local:
+    path: '/etc/authelia/db.sqlite3'
+identity_validation:
+  reset_password:
+    jwt_secret: '{{{{ env "JWT" }}}}'
+notifier:
+  smtp:
+    address: 'submission://smtp-relay.brevo.com:587'
+    password: 'SMTP-SECRET'
+"""
+
+
+@pytest.fixture
+def config_files(tmp_path: Path) -> Path:
+    users = tmp_path / "users.yml"
+    users.write_text(USERS_YML)
+    config = tmp_path / "configuration.yml"
+    config.write_text(CONFIG_YML.format(users=users))
+    return config
+
+
+SECOND_FACTOR = {
+    "totp": [{"username": "micha"}],
+    "webauthn": [{"username": "micha", "description": "YubiKey", "passkey": True}],
+    "duo": [],
+}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("$argon2id$v=19$...", "argon2id"),
+        ("$6$rounds=5000$x$y", "sha512crypt"),
+        ("$2b$12$abc", "bcrypt"),
+        ("$pbkdf2-sha512$310000$x$y", "pbkdf2-sha512"),
+        ("plaintext", "unknown"),
+        (None, "none"),
+    ],
+)
+def test_hash_algorithm(value, expected) -> None:
+    assert hash_algorithm(value) == expected
+
+
+def test_users(config_files: Path) -> None:
+    data = AutheliaConfigReader(str(config_files)).read(SECOND_FACTOR)
+    users = data["users"]
+    assert users["supported"] is True and users["backend"] == "file"
+    by_name = {u["username"]: u for u in users["users"]}
+    assert list(by_name) == ["anna", "gast", "micha"]
+
+    assert by_name["micha"]["has_second_factor"] is True
+    assert by_name["micha"]["passkeys"] == 1
+    assert by_name["anna"]["has_second_factor"] is False
+    assert by_name["anna"]["password_algorithm"] == "sha512crypt"
+    assert by_name["anna"]["legacy_password_hash"] is True
+    assert by_name["gast"]["disabled"] is True
+    assert by_name["gast"]["has_email"] is False
+    assert users["groups"] == {"admins": ["micha"], "dev": ["micha"], "family": ["anna"]}
+
+    text = json.dumps(data)
+    for secret in ("$argon2id", "micha@example.com", "SUPER-SECRET", "SMTP-SECRET", "ANOTHER-SECRET"):
+        assert secret not in text
+
+
+def test_config(config_files: Path) -> None:
+    cfg = AutheliaConfigReader(str(config_files)).read(SECOND_FACTOR)["config"]
+    assert cfg["access_control"] == {
+        "default_policy": "deny",
+        "rules": 3,
+        "rules_by_policy": {"two_factor": 2, "bypass": 1},
+    }
+    assert cfg["regulation"] == {"max_retries": 3, "find_time": "2m", "ban_time": "5m", "modes": ["user", "ip"]}
+    assert cfg["session"] == {"expiration": "1h", "inactivity": "5m", "remember_me": "1M", "cookie_domains": 1}
+    assert cfg["password_policy"] == {"standard": False, "zxcvbn": True}
+    assert cfg["authentication_backend"]["type"] == "file"
+    assert cfg["second_factor"]["passkey_login"] is True
+    assert cfg["notifier"] == "smtp"
+    assert cfg["storage"] == "local"
+    assert cfg["telemetry_metrics"] is True
+    assert cfg["log_level"] == "info"
+
+
+def test_config_ldap_and_missing(tmp_path: Path) -> None:
+    ldap = tmp_path / "ldap.yml"
+    ldap.write_text("authentication_backend:\n  ldap:\n    address: 'ldap://x'\n    password: 'secret'\n")
+    data = AutheliaConfigReader(str(ldap)).read(SECOND_FACTOR)
+    assert data["users"] == {"supported": False, "backend": "ldap", "error": "ldap_not_supported"}
+    assert data["config"]["authentication_backend"]["type"] == "ldap"
+    assert "secret" not in json.dumps(data)
+
+    missing = AutheliaConfigReader(str(tmp_path / "nope.yml")).read(SECOND_FACTOR)
+    assert missing["users"]["error"] == "config_not_found"
+
+
+def test_yaml_cache_reloads_on_change(config_files: Path) -> None:
+    reader = AutheliaConfigReader(str(config_files))
+    assert reader.read(SECOND_FACTOR)["config"]["log_level"] == "info"
+    import os
+    import time as _time
+
+    config_files.write_text(config_files.read_text().replace("level: 'info'", "level: 'debug'"))
+    stat = config_files.stat()
+    os.utime(config_files, (stat.st_atime, stat.st_mtime + 5))
+    _time.sleep(0)
+    assert reader.read(SECOND_FACTOR)["config"]["log_level"] == "debug"

@@ -40,4 +40,4 @@ rules:
   entity-disabled-by-default: done
   entity-translations: done
   devices: done
-  repair-issues: todo
+  repair-issues: done

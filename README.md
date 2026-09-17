@@ -25,7 +25,8 @@ A custom integration that brings your self-hosted [Authelia](https://www.autheli
 - **Health**: reachability via `/api/health`, readiness via `/api/health/verbose` (if available), telemetry status
 - **Process diagnostics**: start time, memory, CPU time, file descriptors, network traffic, goroutines, Go version
 - **Update entity** based on the latest GitHub release
-- **Optional database agent**: active bans, login history with user and IP, 2FA devices, WebAuthn clone warnings and automatic version detection
+- **Optional database agent**: active bans, login history with user and IP, 2FA devices, users without 2FA, security configuration, WebAuthn clone warnings and automatic version detection
+- **Repair issues** for users without second factor, legacy password hashes, a non-`deny` default policy, cloned WebAuthn credentials and a rejected agent token
 - Config flow, reconfiguration, options flow, diagnostics download
 - No credentials required, fully local polling (except the optional GitHub release check)
 
@@ -88,19 +89,22 @@ The setup validates both endpoints and tells you whether the telemetry port is u
 
 | Option | Default | Description |
 |---|---|---|
-| Polling interval | `30 s` | Interval for metrics and health check (10–300 s) |
-| Installed Authelia version | empty | e.g. `4.39.27`. Enables the update entity (see [Limitations](#limitations)) |
+| Polling interval | `30 s` | Interval for metrics, health check and agent (10–300 s) |
+| Agent URL / Agent token | empty | Connects the optional [database agent](#database-agent-optional) |
+| Warn about users without 2FA | on | Creates a repair issue for active users without second factor (agent only) |
+| Installed Authelia version | empty | Only needed without agent, e.g. `4.39.27`. Enables the update entity |
 
 ## Database agent (optional)
 
-Authelia's metrics only contain counters. Details such as *who* failed to log in *from where*, active bans or registered 2FA devices live in Authelia's storage database. The **Authelia HA Agent** is a small companion service that runs next to Authelia and exposes this data read-only to Home Assistant.
+Authelia's metrics only contain counters. Details such as *who* failed to log in *from where*, active bans, registered 2FA devices or users without a second factor live in Authelia's storage database, user database and configuration. The **Authelia HA Agent** is a small companion service that runs next to Authelia and exposes this data read-only to Home Assistant.
 
-- Single Python file, standard library only (Python ≥ 3.11), runs as a systemd service
+- Single Python file, runs as a systemd service (Python ≥ 3.11; `python3-yaml` for users and configuration, installed automatically on Debian/Ubuntu)
 - Opens the SQLite database strictly read-only (`mode=ro`, `query_only`)
+- Reads the file user database (`authentication_backend.file`) and an allow-list of non-secret configuration values
 - Protected by a bearer token; optional HTTPS
-- Never exposes TOTP secrets, WebAuthn keys, request URIs or OAuth2/OIDC sessions
+- Never exposes TOTP secrets, WebAuthn keys, password hashes (only the algorithm), e-mail addresses, request URIs, OAuth2/OIDC sessions or any secret from the configuration
 - Detects the installed Authelia version via `authelia --version`, so the update entity works without manual input
-- Currently supports the **SQLite** storage backend (`storage.local`)
+- Supports the **SQLite** storage backend (`storage.local`) and the **file** authentication backend; with LDAP, users are not available
 
 ### Install the agent
 
@@ -112,7 +116,7 @@ curl -fsSL https://raw.githubusercontent.com/swater2k/ha-authelia/main/agent/ins
 
 The installer places the agent in `/opt/authelia-ha-agent`, generates a random token in `/etc/authelia-ha-agent/agent.env`, enables the `authelia-ha-agent` service on port `9960` and prints URL and token.
 
-Options: `--port <port>`, `--db <path>`, `--rotate-token`. Running the installer again updates the agent and keeps the token.
+Options: `--port <port>`, `--db <path>`, `--config <path>`, `--rotate-token`. Running the installer again updates the agent and keeps the token.
 
 ```bash
 systemctl status authelia-ha-agent
@@ -185,6 +189,29 @@ Only created when the agent is configured.
 | Authelia version | sensor (diagnostic) | ✓ |
 | Database schema version | sensor (diagnostic) | ✗ |
 
+#### Users (file backend)
+
+| Entity | Type | Default |
+|---|---|---|
+| Users (list with groups, 2FA status and hash algorithm as attributes) | sensor | ✓ |
+| Users without 2FA (active users only) | sensor | ✓ |
+| Disabled users | sensor | ✓ |
+| Users with legacy password hash | sensor | ✓ |
+| Users without e-mail | sensor | ✗ |
+| Groups (members as attributes) | sensor (diagnostic) | ✓ |
+
+#### Security configuration
+
+| Entity | Type | Default |
+|---|---|---|
+| Default policy (`deny`, `one_factor`, `two_factor`, `bypass`) | sensor (diagnostic) | ✓ |
+| Access control rules (count per policy as attributes) | sensor (diagnostic) | ✓ |
+| Bypass rules | sensor (diagnostic) | ✓ |
+| Regulation max retries (find time, ban time, modes as attributes) | sensor (diagnostic) | ✓ |
+| Session expiration (inactivity, remember me as attributes) | sensor (diagnostic) | ✓ |
+| Password policy (`zxcvbn`, `standard`, `disabled`) | sensor (diagnostic) | ✓ |
+| Notifier (storage, log level, telemetry as attributes) | sensor (diagnostic) | ✗ |
+
 With the agent, *Failed logins (24 h)*, *Successful logins (24 h)* and *Banned attempts (24 h)* are calculated from the database and survive Home Assistant restarts. The attribute `source` shows whether a value comes from `database` or `metrics`.
 
 ### Health & diagnostics
@@ -243,11 +270,24 @@ automation:
             {%- else %} ({{ a.count }}×){% endif %}
 ```
 
+## Repair issues
+
+With the database agent, the integration reports security findings under **Settings → Repairs**. Issues disappear automatically once the cause is fixed.
+
+| Issue | Severity |
+|---|---|
+| Active users without second factor (can be disabled in the options) | warning |
+| Users with a password hash algorithm that is no longer recommended | warning |
+| `access_control.default_policy` is not `deny` | warning |
+| WebAuthn credential flagged as possibly cloned | error |
+| Agent rejects the configured token | error |
+
 ## Limitations
 
 - **Installed version**: Authelia does not expose its version through an unauthenticated endpoint. Without the agent, the installed version has to be entered in the options and kept up to date manually.
 - **Rolling windows** from metrics are kept in memory and need time to fill up after a Home Assistant restart. With the agent, the 24 h values come from the database instead.
-- **Agent storage backends**: the agent currently supports SQLite only.
+- **Agent backends**: the agent supports the SQLite storage backend and the file authentication backend. With LDAP, user entities stay unavailable.
+- **Users without 2FA** does not evaluate access control rules: a user who only needs `one_factor` resources is reported as well. Disable the warning in the options if that is intended.
 - **Counter resets**: Authelia's counters restart at zero when Authelia restarts. Total sensors use `total_increasing`, which Home Assistant handles automatically; rolling windows and events compensate for resets.
 - **No user or IP details without agent**: bans, 2FA devices and login history are only available through the database agent.
 
@@ -270,6 +310,7 @@ automation:
 - **"Provides no Authelia metrics"**: the configured port answers but is not Authelia's telemetry endpoint.
 - **"Token rejected by the agent"**: compare with `grep AGENT_TOKEN /etc/authelia-ha-agent/agent.env`.
 - **Agent reports a database error**: check `journalctl -u authelia-ha-agent` and the `AUTHELIA_DB` path.
+- **User and configuration entities are unknown**: `python3-yaml` is missing on the Authelia host (`apt install python3-yaml`) or `AUTHELIA_CONFIG` points to the wrong file. The diagnostics download shows the reason under `agent.users.error`.
 - **Diagnostics**: Settings → Devices & services → Authelia → ⋮ → Download diagnostics (the host is redacted).
 - **Debug logging**:
 
@@ -278,29 +319,6 @@ automation:
     logs:
       custom_components.authelia: debug
   ```
-
-## Development
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements_test.txt ruff
-ruff check custom_components tests agent
-pytest -q
-```
-
-Tests run against `pytest-homeassistant-custom-component` and use a real metrics output of Authelia 4.39.27 as fixture (`tests/fixtures/`). Agent tests use the real storage schema (migration 29) in `tests/agent/`.
-
-### Releasing
-
-1. Bump `version` in `custom_components/authelia/manifest.json`
-2. Commit and push
-3. Tag and create a release:
-
-   ```bash
-   git tag -a vX.Y.Z -m "vX.Y.Z"
-   git push origin vX.Y.Z
-   gh release create vX.Y.Z --title "vX.Y.Z" --generate-notes
-   ```
 
 ## License
 

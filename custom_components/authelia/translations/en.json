@@ -58,13 +58,15 @@
           "scan_interval": "Polling interval",
           "installed_version": "Installed Authelia version",
           "agent_url": "Agent URL",
-          "agent_token": "Agent token"
+          "agent_token": "Agent token",
+          "repair_users_without_2fa": "Warn about users without 2FA"
         },
         "data_description": {
           "scan_interval": "For metrics and health check.",
           "installed_version": "Only needed without agent, e.g. 4.39.27. Enables the update entity.",
           "agent_url": "Optional. URL of the Authelia HA Agent, e.g. http://192.168.1.10:9960. Adds bans, login history with user and IP, and 2FA devices.",
-          "agent_token": "Token printed by the agent installer."
+          "agent_token": "Token printed by the agent installer.",
+          "repair_users_without_2fa": "Creates a repair issue when active users have no second factor (requires the agent)."
         }
       }
     },
@@ -227,6 +229,56 @@
       },
       "schema_version": {
         "name": "Database schema version"
+      },
+      "users_total": {
+        "name": "Users"
+      },
+      "users_without_2fa": {
+        "name": "Users without 2FA"
+      },
+      "users_disabled": {
+        "name": "Disabled users"
+      },
+      "users_legacy_password_hash": {
+        "name": "Users with legacy password hash"
+      },
+      "users_without_email": {
+        "name": "Users without e-mail"
+      },
+      "user_groups": {
+        "name": "Groups"
+      },
+      "default_policy": {
+        "name": "Default policy",
+        "state": {
+          "deny": "Deny",
+          "one_factor": "One factor",
+          "two_factor": "Two factor",
+          "bypass": "Bypass"
+        }
+      },
+      "access_control_rules": {
+        "name": "Access control rules"
+      },
+      "bypass_rules": {
+        "name": "Bypass rules"
+      },
+      "regulation_max_retries": {
+        "name": "Regulation max retries"
+      },
+      "session_expiration": {
+        "name": "Session expiration"
+      },
+      "password_policy": {
+        "name": "Password policy",
+        "state": {
+          "zxcvbn": "zxcvbn",
+          "standard": "Standard",
+          "disabled": "Disabled"
+        }
+      },
+      "notifier": {
+        "name": "Notifier"
       }
     },
     "binary_sensor": {
@@ -265,6 +317,28 @@
           }
         }
       }
+    }
+  },
+  "issues": {
+    "agent_auth_failed": {
+      "title": "Authelia agent rejects the token",
+      "description": "The database agent of **{title}** rejected the configured token. Bans, login history, users and configuration are not updated.\n\nCheck the token on the Authelia host with `grep AGENT_TOKEN /etc/authelia-ha-agent/agent.env` and update it under **Settings → Devices & services → Authelia → Configure**."
+    },
+    "users_without_2fa": {
+      "title": "Authelia users without second factor",
+      "description": "These active users of **{title}** have neither TOTP, WebAuthn nor Duo registered: **{users}**.\n\nThey can only access resources with a `one_factor` policy, or they can register a second factor on first access to a `two_factor` resource – anyone who knows the password could do so. Register a second factor for these users.\n\nYou can disable this warning in the integration options."
+    },
+    "legacy_password_hash": {
+      "title": "Authelia users with legacy password hash",
+      "description": "These users of **{title}** use a password hash algorithm that is no longer recommended: **{users}**.\n\nGenerate a new hash with `authelia crypto hash generate argon2` and replace it in the users database."
+    },
+    "default_policy_not_deny": {
+      "title": "Authelia default policy is not deny",
+      "description": "The `access_control.default_policy` of **{title}** is `{policy}`. Requests that match no rule are therefore not denied.\n\nSet `default_policy: 'deny'` and allow access explicitly with rules."
+    },
+    "webauthn_clone_warning": {
+      "title": "Possible cloned WebAuthn credential",
+      "description": "Authelia flagged these WebAuthn credentials of **{title}** because their signature counter went backwards: **{credentials}**.\n\nThis can indicate a cloned security key. Verify the device with its owner, remove the credential in Authelia and register it again."
     }
   }
 }

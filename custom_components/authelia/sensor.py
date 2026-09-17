@@ -267,6 +267,17 @@ def _ban_list(items: list[dict[str, Any]], key: str) -> dict[str, Any]:
     }
 
 
+def _password_policy(a: AgentData) -> str | None:
+    if not a.config.get("supported"):
+        return None
+    policy = a.config.get("password_policy") or {}
+    if policy.get("zxcvbn"):
+        return "zxcvbn"
+    if policy.get("standard"):
+        return "standard"
+    return "disabled"
+
+
 def _webauthn(a: AgentData) -> list[dict[str, Any]]:
     return a.second_factor.get("webauthn") or []
 
@@ -352,6 +363,142 @@ AGENT_SENSORS: tuple[AutheliaAgentSensorDescription, ...] = (
         state_class=MEAS,
         entity_registry_enabled_default=False,
         value_fn=lambda a: sum(1 for c in _webauthn(a) if c.get("passkey")),
+    ),
+    # --- Benutzer (users.yml) -------------------------------------------- #
+    AutheliaAgentSensorDescription(
+        key="users_total",
+        translation_key="users_total",
+        icon="mdi:account-group",
+        state_class=MEAS,
+        value_fn=lambda a: len(a.user_list()) if a.users.get("supported") else None,
+        attrs_fn=lambda a: {
+            "users": [
+                {k: u.get(k) for k in ("username", "displayname", "groups", "disabled",
+                                        "has_second_factor", "password_algorithm")}
+                for u in a.user_list()
+            ]
+        },
+    ),
+    AutheliaAgentSensorDescription(
+        key="users_without_2fa",
+        translation_key="users_without_2fa",
+        icon="mdi:shield-account-outline",
+        state_class=MEAS,
+        value_fn=lambda a: len(a.users_without_2fa()) if a.users.get("supported") else None,
+        attrs_fn=lambda a: {"users": a.users_without_2fa()},
+    ),
+    AutheliaAgentSensorDescription(
+        key="users_disabled",
+        translation_key="users_disabled",
+        icon="mdi:account-off",
+        state_class=MEAS,
+        value_fn=lambda a: (
+            sum(1 for u in a.user_list() if u.get("disabled")) if a.users.get("supported") else None
+        ),
+        attrs_fn=lambda a: {"users": [u["username"] for u in a.user_list() if u.get("disabled")]},
+    ),
+    AutheliaAgentSensorDescription(
+        key="users_legacy_password_hash",
+        translation_key="users_legacy_password_hash",
+        icon="mdi:lock-alert-outline",
+        state_class=MEAS,
+        value_fn=lambda a: len(a.users_with_legacy_hash()) if a.users.get("supported") else None,
+        attrs_fn=lambda a: {"users": a.users_with_legacy_hash()},
+    ),
+    AutheliaAgentSensorDescription(
+        key="users_without_email",
+        translation_key="users_without_email",
+        icon="mdi:email-off-outline",
+        state_class=MEAS,
+        entity_registry_enabled_default=False,
+        value_fn=lambda a: (
+            sum(1 for u in a.active_users() if not u.get("has_email"))
+            if a.users.get("supported") else None
+        ),
+        attrs_fn=lambda a: {
+            "users": [u["username"] for u in a.active_users() if not u.get("has_email")]
+        },
+    ),
+    AutheliaAgentSensorDescription(
+        key="user_groups",
+        translation_key="user_groups",
+        icon="mdi:account-multiple",
+        entity_category=DIAG,
+        value_fn=lambda a: len(a.users.get("groups") or {}) if a.users.get("supported") else None,
+        attrs_fn=lambda a: {"groups": a.users.get("groups") or {}},
+    ),
+    # --- Sicherheitskonfiguration (configuration.yml) --------------------- #
+    AutheliaAgentSensorDescription(
+        key="default_policy",
+        translation_key="default_policy",
+        icon="mdi:shield-lock-outline",
+        entity_category=DIAG,
+        device_class=SensorDeviceClass.ENUM,
+        options=["deny", "one_factor", "two_factor", "bypass"],
+        value_fn=lambda a: (a.config.get("access_control") or {}).get("default_policy"),
+    ),
+    AutheliaAgentSensorDescription(
+        key="access_control_rules",
+        translation_key="access_control_rules",
+        icon="mdi:format-list-checks",
+        entity_category=DIAG,
+        value_fn=lambda a: (a.config.get("access_control") or {}).get("rules"),
+        attrs_fn=lambda a: {
+            "by_policy": (a.config.get("access_control") or {}).get("rules_by_policy") or {}
+        },
+    ),
+    AutheliaAgentSensorDescription(
+        key="bypass_rules",
+        translation_key="bypass_rules",
+        icon="mdi:shield-off-outline",
+        entity_category=DIAG,
+        value_fn=lambda a: (
+            ((a.config.get("access_control") or {}).get("rules_by_policy") or {}).get("bypass", 0)
+            if a.config.get("supported") else None
+        ),
+    ),
+    AutheliaAgentSensorDescription(
+        key="regulation_max_retries",
+        translation_key="regulation_max_retries",
+        icon="mdi:timer-lock-outline",
+        entity_category=DIAG,
+        value_fn=lambda a: (a.config.get("regulation") or {}).get("max_retries"),
+        attrs_fn=lambda a: {
+            k: v for k, v in (a.config.get("regulation") or {}).items() if k != "max_retries"
+        },
+    ),
+    AutheliaAgentSensorDescription(
+        key="session_expiration",
+        translation_key="session_expiration",
+        icon="mdi:timer-sand",
+        entity_category=DIAG,
+        value_fn=lambda a: (a.config.get("session") or {}).get("expiration"),
+        attrs_fn=lambda a: {
+            k: v for k, v in (a.config.get("session") or {}).items() if k != "expiration"
+        },
+    ),
+    AutheliaAgentSensorDescription(
+        key="password_policy",
+        translation_key="password_policy",
+        icon="mdi:form-textbox-password",
+        entity_category=DIAG,
+        device_class=SensorDeviceClass.ENUM,
+        options=["zxcvbn", "standard", "disabled"],
+        value_fn=lambda a: _password_policy(a),
+    ),
+    AutheliaAgentSensorDescription(
+        key="notifier",
+        translation_key="notifier",
+        icon="mdi:email-fast-outline",
+        entity_category=DIAG,
+        entity_registry_enabled_default=False,
+        value_fn=lambda a: a.config.get("notifier"),
+        attrs_fn=lambda a: {
+            "startup_check_disabled": a.config.get("notifier_startup_check_disabled"),
+            "storage": a.config.get("storage"),
+            "log_level": a.config.get("log_level"),
+            "telemetry_metrics": a.config.get("telemetry_metrics"),
+        },
     ),
     AutheliaAgentSensorDescription(
         key="authelia_version",
