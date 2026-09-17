@@ -279,6 +279,29 @@ automation:
       custom_components.authelia: debug
   ```
 
+## Development
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements_test.txt ruff
+ruff check custom_components tests agent
+pytest -q
+```
+
+Tests run against `pytest-homeassistant-custom-component` and use a real metrics output of Authelia 4.39.27 as fixture (`tests/fixtures/`). Agent tests use the real storage schema (migration 29) in `tests/agent/`.
+
+### Releasing
+
+1. Bump `version` in `custom_components/authelia/manifest.json`
+2. Commit and push
+3. Tag and create a release:
+
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin vX.Y.Z
+   gh release create vX.Y.Z --title "vX.Y.Z" --generate-notes
+   ```
+
 ## License
 
 [MIT](LICENSE)
