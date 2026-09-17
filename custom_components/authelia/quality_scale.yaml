@@ -1,0 +1,43 @@
+rules:
+  # Bronze
+  config-flow: done
+  test-before-configure: done
+  unique-config-entry: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-setup: done
+  appropriate-polling: done
+  common-modules: done
+  dependency-transparency: done
+  config-flow-test-coverage: todo
+  action-setup:
+    status: exempt
+    comment: Keine Service-Actions.
+  docs-actions:
+    status: exempt
+    comment: Keine Service-Actions.
+  brands: todo
+  docs-high-level-description: todo
+  docs-installation-instructions: todo
+  docs-removal-instructions: todo
+  entity-event-setup: done
+  # Silver
+  config-entry-unloading: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow:
+    status: exempt
+    comment: Keine Authentifizierung.
+  options-flow: done
+  # Gold
+  diagnostics: done
+  reconfiguration-flow: done
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default: done
+  entity-translations: done
+  devices: done
+  repair-issues: todo

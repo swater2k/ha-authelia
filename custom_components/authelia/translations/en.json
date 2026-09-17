@@ -1,0 +1,215 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Authelia",
+        "description": "Requires `telemetry.metrics.enabled: true` in the Authelia configuration.",
+        "data": {
+          "host": "Host",
+          "server_port": "Server port",
+          "metrics_port": "Telemetry port",
+          "ssl": "Server uses HTTPS",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "IP or hostname of the Authelia server in your LAN.",
+          "server_port": "Authelia web server port (default 9091), used for /api/health.",
+          "metrics_port": "Port of telemetry.metrics (default 9959). Never expose it publicly.",
+          "ssl": "Only if Authelia itself terminates TLS.",
+          "verify_ssl": "Disable for self-signed certificates."
+        }
+      },
+      "reconfigure": {
+        "title": "Authelia",
+        "description": "Change the connection settings.",
+        "data": {
+          "host": "Host",
+          "server_port": "Server port",
+          "metrics_port": "Telemetry port",
+          "ssl": "Server uses HTTPS",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "IP or hostname of the Authelia server in your LAN.",
+          "server_port": "Authelia web server port (default 9091), used for /api/health.",
+          "metrics_port": "Port of telemetry.metrics (default 9959). Never expose it publicly.",
+          "ssl": "Only if Authelia itself terminates TLS.",
+          "verify_ssl": "Disable for self-signed certificates."
+        }
+      }
+    },
+    "error": {
+      "metrics_unreachable": "Telemetry endpoint not reachable. Is telemetry.metrics enabled and the port reachable from Home Assistant?",
+      "metrics_invalid": "The endpoint answers but provides no Authelia metrics.",
+      "server_unreachable": "Metrics OK, but /api/health on the server port is not reachable.",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This Authelia instance is already configured.",
+      "reconfigure_successful": "Reconfiguration successful.",
+      "different_instance": "Host/port belong to a different Authelia instance."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Authelia options",
+        "data": {
+          "scan_interval": "Polling interval",
+          "installed_version": "Installed Authelia version"
+        },
+        "data_description": {
+          "scan_interval": "For metrics and health check.",
+          "installed_version": "e.g. 4.39.27 – enables the update entity. Authelia does not expose its version via API."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "failed_logins_5m": {
+        "name": "Failed logins (5 min)"
+      },
+      "failed_logins_1h": {
+        "name": "Failed logins (1 h)"
+      },
+      "failed_logins_24h": {
+        "name": "Failed logins (24 h)"
+      },
+      "successful_logins_24h": {
+        "name": "Successful logins (24 h)"
+      },
+      "banned_attempts_24h": {
+        "name": "Banned attempts (24 h)"
+      },
+      "authz_denied_1h": {
+        "name": "Denied authorizations (1 h)"
+      },
+      "authn_success_total": {
+        "name": "First factor successful"
+      },
+      "authn_failed_total": {
+        "name": "First factor failed"
+      },
+      "authn_banned_total": {
+        "name": "First factor banned"
+      },
+      "second_factor_success_total": {
+        "name": "Second factor successful"
+      },
+      "second_factor_failed_total": {
+        "name": "Second factor failed"
+      },
+      "second_factor_banned_total": {
+        "name": "Second factor banned"
+      },
+      "second_factor_totp_total": {
+        "name": "Second factor TOTP"
+      },
+      "second_factor_webauthn_total": {
+        "name": "Second factor WebAuthn"
+      },
+      "second_factor_duo_total": {
+        "name": "Second factor Duo"
+      },
+      "passkey_success_total": {
+        "name": "Passkey successful"
+      },
+      "passkey_failed_total": {
+        "name": "Passkey failed"
+      },
+      "authz_granted_total": {
+        "name": "Authorizations granted"
+      },
+      "authz_redirect_total": {
+        "name": "Authorizations redirected to login"
+      },
+      "authz_unauthorized_total": {
+        "name": "Authorizations unauthorized"
+      },
+      "authz_forbidden_total": {
+        "name": "Authorizations forbidden"
+      },
+      "requests_total": {
+        "name": "HTTP requests"
+      },
+      "requests_client_errors_total": {
+        "name": "HTTP client errors"
+      },
+      "requests_server_errors_total": {
+        "name": "HTTP server errors"
+      },
+      "server_errors_1h": {
+        "name": "Server errors (1 h)"
+      },
+      "authn_duration_avg_1h": {
+        "name": "Average login duration (1 h)"
+      },
+      "request_duration_avg_1h": {
+        "name": "Average request duration (1 h)"
+      },
+      "request_duration_p95_1h": {
+        "name": "Request duration p95 (1 h)"
+      },
+      "process_started": {
+        "name": "Started"
+      },
+      "process_memory": {
+        "name": "Memory usage"
+      },
+      "go_heap_alloc": {
+        "name": "Heap allocated"
+      },
+      "process_cpu_seconds": {
+        "name": "CPU time"
+      },
+      "process_open_fds": {
+        "name": "Open file descriptors"
+      },
+      "process_network_rx": {
+        "name": "Network received"
+      },
+      "process_network_tx": {
+        "name": "Network sent"
+      },
+      "go_goroutines": {
+        "name": "Goroutines"
+      },
+      "go_version": {
+        "name": "Go version"
+      },
+      "health_latency": {
+        "name": "Health check latency"
+      },
+      "latest_version": {
+        "name": "Latest version"
+      }
+    },
+    "binary_sensor": {
+      "reachable": {
+        "name": "Reachable"
+      },
+      "readiness_problem": {
+        "name": "Readiness problem"
+      },
+      "metrics_ok": {
+        "name": "Telemetry"
+      }
+    },
+    "event": {
+      "security": {
+        "name": "Security event",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "first_factor_failed": "First factor failed",
+              "second_factor_failed": "Second factor failed",
+              "passkey_failed": "Passkey failed",
+              "banned": "Attempt banned"
+            }
+          }
+        }
+      }
+    }
+  }
+}

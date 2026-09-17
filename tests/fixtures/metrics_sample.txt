@@ -1,0 +1,65 @@
+# VORLÄUFIG: rekonstruiert aus Authelia-Doku + client_golang-Konventionen.
+# Wird durch echte Ausgabe von `curl http://192.168.178.125:9959/metrics` ersetzt.
+# HELP authelia_authn The number of 1FA authentications processed.
+# TYPE authelia_authn counter
+authelia_authn{banned="false",success="true"} 42
+authelia_authn{banned="false",success="false"} 7
+authelia_authn{banned="true",success="false"} 2
+# HELP authelia_authn_duration The time an authentication attempt takes in seconds.
+# TYPE authelia_authn_duration histogram
+authelia_authn_duration_bucket{success="true",le="0.1"} 1
+authelia_authn_duration_bucket{success="true",le="0.25"} 10
+authelia_authn_duration_bucket{success="true",le="0.5"} 30
+authelia_authn_duration_bucket{success="true",le="1"} 40
+authelia_authn_duration_bucket{success="true",le="+Inf"} 42
+authelia_authn_duration_sum{success="true"} 17.5
+authelia_authn_duration_count{success="true"} 42
+authelia_authn_duration_bucket{success="false",le="0.1"} 0
+authelia_authn_duration_bucket{success="false",le="0.25"} 0
+authelia_authn_duration_bucket{success="false",le="0.5"} 0
+authelia_authn_duration_bucket{success="false",le="1"} 5
+authelia_authn_duration_bucket{success="false",le="+Inf"} 9
+authelia_authn_duration_sum{success="false"} 11.2
+authelia_authn_duration_count{success="false"} 9
+# HELP authelia_authn_second_factor The number of 2FA authentications processed.
+# TYPE authelia_authn_second_factor counter
+authelia_authn_second_factor{banned="false",success="true",type="totp"} 30
+authelia_authn_second_factor{banned="false",success="false",type="totp"} 3
+authelia_authn_second_factor{banned="false",success="true",type="webauthn"} 12
+# HELP authelia_authn_passkey The number of passkey authentications processed.
+# TYPE authelia_authn_passkey counter
+authelia_authn_passkey{success="true"} 4
+# HELP authelia_authz The number of authz requests processed.
+# TYPE authelia_authz counter
+authelia_authz{code="200"} 15000
+authelia_authz{code="302"} 120
+authelia_authz{code="401"} 35
+authelia_authz{code="403"} 1
+# HELP authelia_request The number of requests processed.
+# TYPE authelia_request counter
+authelia_request{code="200",method="GET"} 900
+authelia_request{code="200",method="POST"} 80
+authelia_request{code="401",method="POST"} 9
+authelia_request{code="404",method="GET"} 3
+# HELP authelia_request_duration The time a request takes in seconds.
+# TYPE authelia_request_duration histogram
+authelia_request_duration_bucket{code="200",le="0.005"} 500
+authelia_request_duration_bucket{code="200",le="0.01"} 900
+authelia_request_duration_bucket{code="200",le="+Inf"} 980
+authelia_request_duration_sum{code="200"} 6.1
+authelia_request_duration_count{code="200"} 980
+# HELP authelia_request_duration_openid_connect The time an OIDC request takes in seconds.
+# TYPE authelia_request_duration_openid_connect histogram
+authelia_request_duration_openid_connect_bucket{code="200",endpoint="token",le="0.1"} 3
+authelia_request_duration_openid_connect_bucket{code="200",endpoint="token",le="+Inf"} 4
+authelia_request_duration_openid_connect_sum{code="200",endpoint="token"} 0.9
+authelia_request_duration_openid_connect_count{code="200",endpoint="token"} 4
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 23
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 4.1238528e+07
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.7579e+09

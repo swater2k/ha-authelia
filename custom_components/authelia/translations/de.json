@@ -1,0 +1,215 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Authelia",
+        "description": "Voraussetzung: `telemetry.metrics.enabled: true` in der Authelia-Konfiguration.",
+        "data": {
+          "host": "Host",
+          "server_port": "Server-Port",
+          "metrics_port": "Telemetry-Port",
+          "ssl": "Server nutzt HTTPS",
+          "verify_ssl": "SSL-Zertifikat prüfen"
+        },
+        "data_description": {
+          "host": "IP oder Hostname des Authelia-Servers im LAN.",
+          "server_port": "Port des Authelia-Webservers (Standard 9091), genutzt für /api/health.",
+          "metrics_port": "Port von telemetry.metrics (Standard 9959). Niemals öffentlich freigeben.",
+          "ssl": "Nur wenn Authelia selbst TLS terminiert.",
+          "verify_ssl": "Für selbstsignierte Zertifikate deaktivieren."
+        }
+      },
+      "reconfigure": {
+        "title": "Authelia",
+        "description": "Verbindungseinstellungen ändern.",
+        "data": {
+          "host": "Host",
+          "server_port": "Server-Port",
+          "metrics_port": "Telemetry-Port",
+          "ssl": "Server nutzt HTTPS",
+          "verify_ssl": "SSL-Zertifikat prüfen"
+        },
+        "data_description": {
+          "host": "IP oder Hostname des Authelia-Servers im LAN.",
+          "server_port": "Port des Authelia-Webservers (Standard 9091), genutzt für /api/health.",
+          "metrics_port": "Port von telemetry.metrics (Standard 9959). Niemals öffentlich freigeben.",
+          "ssl": "Nur wenn Authelia selbst TLS terminiert.",
+          "verify_ssl": "Für selbstsignierte Zertifikate deaktivieren."
+        }
+      }
+    },
+    "error": {
+      "metrics_unreachable": "Telemetry-Endpoint nicht erreichbar. Ist telemetry.metrics aktiviert und der Port von Home Assistant aus erreichbar?",
+      "metrics_invalid": "Der Endpoint antwortet, liefert aber keine Authelia-Metriken.",
+      "server_unreachable": "Metrics OK, aber /api/health auf dem Server-Port ist nicht erreichbar.",
+      "unknown": "Unerwarteter Fehler"
+    },
+    "abort": {
+      "already_configured": "Diese Authelia-Instanz ist bereits eingerichtet.",
+      "reconfigure_successful": "Neukonfiguration erfolgreich.",
+      "different_instance": "Host/Port gehören zu einer anderen Authelia-Instanz."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Authelia-Optionen",
+        "data": {
+          "scan_interval": "Abfrageintervall",
+          "installed_version": "Installierte Authelia-Version"
+        },
+        "data_description": {
+          "scan_interval": "Für Metriken und Health-Check.",
+          "installed_version": "z. B. 4.39.27 – aktiviert die Update-Entity. Authelia gibt seine Version nicht per API heraus."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "failed_logins_5m": {
+        "name": "Fehlgeschlagene Anmeldungen (5 min)"
+      },
+      "failed_logins_1h": {
+        "name": "Fehlgeschlagene Anmeldungen (1 h)"
+      },
+      "failed_logins_24h": {
+        "name": "Fehlgeschlagene Anmeldungen (24 h)"
+      },
+      "successful_logins_24h": {
+        "name": "Erfolgreiche Anmeldungen (24 h)"
+      },
+      "banned_attempts_24h": {
+        "name": "Gesperrte Versuche (24 h)"
+      },
+      "authz_denied_1h": {
+        "name": "Abgelehnte Autorisierungen (1 h)"
+      },
+      "authn_success_total": {
+        "name": "1FA erfolgreich"
+      },
+      "authn_failed_total": {
+        "name": "1FA fehlgeschlagen"
+      },
+      "authn_banned_total": {
+        "name": "1FA gesperrt"
+      },
+      "second_factor_success_total": {
+        "name": "2FA erfolgreich"
+      },
+      "second_factor_failed_total": {
+        "name": "2FA fehlgeschlagen"
+      },
+      "second_factor_banned_total": {
+        "name": "2FA gesperrt"
+      },
+      "second_factor_totp_total": {
+        "name": "2FA TOTP"
+      },
+      "second_factor_webauthn_total": {
+        "name": "2FA WebAuthn"
+      },
+      "second_factor_duo_total": {
+        "name": "2FA Duo"
+      },
+      "passkey_success_total": {
+        "name": "Passkey erfolgreich"
+      },
+      "passkey_failed_total": {
+        "name": "Passkey fehlgeschlagen"
+      },
+      "authz_granted_total": {
+        "name": "Autorisierungen erlaubt"
+      },
+      "authz_redirect_total": {
+        "name": "Autorisierungen zur Anmeldung umgeleitet"
+      },
+      "authz_unauthorized_total": {
+        "name": "Autorisierungen nicht angemeldet"
+      },
+      "authz_forbidden_total": {
+        "name": "Autorisierungen verboten"
+      },
+      "requests_total": {
+        "name": "HTTP-Anfragen"
+      },
+      "requests_client_errors_total": {
+        "name": "HTTP-Clientfehler"
+      },
+      "requests_server_errors_total": {
+        "name": "HTTP-Serverfehler"
+      },
+      "server_errors_1h": {
+        "name": "Serverfehler (1 h)"
+      },
+      "authn_duration_avg_1h": {
+        "name": "Ø Anmeldedauer (1 h)"
+      },
+      "request_duration_avg_1h": {
+        "name": "Ø Anfragedauer (1 h)"
+      },
+      "request_duration_p95_1h": {
+        "name": "Anfragedauer p95 (1 h)"
+      },
+      "process_started": {
+        "name": "Gestartet"
+      },
+      "process_memory": {
+        "name": "Speichernutzung"
+      },
+      "go_heap_alloc": {
+        "name": "Heap belegt"
+      },
+      "process_cpu_seconds": {
+        "name": "CPU-Zeit"
+      },
+      "process_open_fds": {
+        "name": "Offene Dateideskriptoren"
+      },
+      "process_network_rx": {
+        "name": "Netzwerk empfangen"
+      },
+      "process_network_tx": {
+        "name": "Netzwerk gesendet"
+      },
+      "go_goroutines": {
+        "name": "Goroutinen"
+      },
+      "go_version": {
+        "name": "Go-Version"
+      },
+      "health_latency": {
+        "name": "Health-Check-Latenz"
+      },
+      "latest_version": {
+        "name": "Neueste Version"
+      }
+    },
+    "binary_sensor": {
+      "reachable": {
+        "name": "Erreichbar"
+      },
+      "readiness_problem": {
+        "name": "Bereitschaftsproblem"
+      },
+      "metrics_ok": {
+        "name": "Telemetry"
+      }
+    },
+    "event": {
+      "security": {
+        "name": "Sicherheitsereignis",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "first_factor_failed": "1FA fehlgeschlagen",
+              "second_factor_failed": "2FA fehlgeschlagen",
+              "passkey_failed": "Passkey fehlgeschlagen",
+              "banned": "Versuch gesperrt"
+            }
+          }
+        }
+      }
+    }
+  }
+}
