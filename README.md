@@ -25,6 +25,7 @@ A custom integration that brings your self-hosted [Authelia](https://www.autheli
 - **Health**: reachability via `/api/health`, readiness via `/api/health/verbose` (if available), telemetry status
 - **Process diagnostics**: start time, memory, CPU time, file descriptors, network traffic, goroutines, Go version
 - **Update entity** based on the latest GitHub release
+- **Optional database agent**: active bans, login history with user and IP, 2FA devices, WebAuthn clone warnings and automatic version detection
 - Config flow, reconfiguration, options flow, diagnostics download
 - No credentials required, fully local polling (except the optional GitHub release check)
 
@@ -90,6 +91,42 @@ The setup validates both endpoints and tells you whether the telemetry port is u
 | Polling interval | `30 s` | Interval for metrics and health check (10–300 s) |
 | Installed Authelia version | empty | e.g. `4.39.27`. Enables the update entity (see [Limitations](#limitations)) |
 
+## Database agent (optional)
+
+Authelia's metrics only contain counters. Details such as *who* failed to log in *from where*, active bans or registered 2FA devices live in Authelia's storage database. The **Authelia HA Agent** is a small companion service that runs next to Authelia and exposes this data read-only to Home Assistant.
+
+- Single Python file, standard library only (Python ≥ 3.11), runs as a systemd service
+- Opens the SQLite database strictly read-only (`mode=ro`, `query_only`)
+- Protected by a bearer token; optional HTTPS
+- Never exposes TOTP secrets, WebAuthn keys, request URIs or OAuth2/OIDC sessions
+- Detects the installed Authelia version via `authelia --version`, so the update entity works without manual input
+- Currently supports the **SQLite** storage backend (`storage.local`)
+
+### Install the agent
+
+Run inside the Authelia host or LXC as root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/swater2k/ha-authelia/main/agent/install.sh | bash
+```
+
+The installer places the agent in `/opt/authelia-ha-agent`, generates a random token in `/etc/authelia-ha-agent/agent.env`, enables the `authelia-ha-agent` service on port `9960` and prints URL and token.
+
+Options: `--port <port>`, `--db <path>`, `--rotate-token`. Running the installer again updates the agent and keeps the token.
+
+```bash
+systemctl status authelia-ha-agent
+journalctl -u authelia-ha-agent -n 50
+curl -s http://127.0.0.1:9960/health
+```
+
+### Connect it to Home Assistant
+
+**Settings → Devices & services → Authelia → Configure** and enter **Agent URL** (e.g. `http://192.168.1.10:9960`) and **Agent token**. The connection is validated before saving.
+
+> [!IMPORTANT]
+> The agent exposes usernames and IP addresses. Only make port `9960` reachable from Home Assistant (for example with a firewall rule) and never publish it through a reverse proxy or tunnel. Use `AGENT_TLS_CERT` / `AGENT_TLS_KEY` in `agent.env` if you want HTTPS inside your LAN.
+
 ## Entities
 
 All entities belong to a single **Authelia** service device. Entities marked with ✗ are disabled by default and can be enabled in the entity settings.
@@ -130,6 +167,26 @@ All entities belong to a single **Authelia** service device. Entities marked wit
 | Average request duration (1 h) | sensor (ms) | ✗ |
 | Request duration p95 (1 h) | sensor (ms) | ✗ |
 
+### Database agent
+
+Only created when the agent is configured.
+
+| Entity | Type | Default |
+|---|---|---|
+| Active user bans / Active IP bans (list as attributes) | sensor | ✓ |
+| Ban active | binary sensor | ✓ |
+| Last successful login / Last failed login (user, IP, type as attributes) | sensor (timestamp) | ✓ |
+| IPs with failed logins (24 h) | sensor | ✓ |
+| Users with failed logins (24 h) | sensor | ✗ |
+| Users with TOTP / WebAuthn credentials (details as attributes) | sensor | ✓ |
+| Passkeys | sensor | ✗ |
+| WebAuthn clone warning | binary sensor (problem) | ✓ |
+| Database agent | binary sensor (diagnostic) | ✓ |
+| Authelia version | sensor (diagnostic) | ✓ |
+| Database schema version | sensor (diagnostic) | ✗ |
+
+With the agent, *Failed logins (24 h)*, *Successful logins (24 h)* and *Banned attempts (24 h)* are calculated from the database and survive Home Assistant restarts. The attribute `source` shows whether a value comes from `database` or `metrics`.
+
 ### Health & diagnostics
 
 | Entity | Type | Default |
@@ -141,20 +198,25 @@ All entities belong to a single **Authelia** service device. Entities marked wit
 | Memory usage | sensor (diagnostic) | ✓ |
 | Latest version | sensor (diagnostic) | ✓ |
 | Heap allocated, CPU time, open file descriptors, network received/sent, goroutines, Go version, health check latency | sensor (diagnostic) | ✗ |
-| Authelia | update | ✓ (only if the installed version is set) |
+| Authelia | update | ✓ (with agent, or if the installed version is set) |
 
 ## Security event
 
-The event entity fires whenever new failures were counted since the last poll. Event types:
+The event entity fires for new authentication activity since the last poll. Its data source depends on whether the database agent is configured.
 
-| Event type | Meaning |
-|---|---|
-| `first_factor_failed` | Failed username/password attempt |
-| `second_factor_failed` | Failed TOTP, WebAuthn or Duo attempt |
-| `passkey_failed` | Failed passkey attempt |
-| `banned` | Attempt rejected by Authelia's regulation (ban) |
+| Event type | Meaning | Without agent | With agent |
+|---|---|---|---|
+| `first_factor_failed` | Failed username/password attempt | ✓ | ✓ |
+| `second_factor_failed` | Failed TOTP, WebAuthn or Duo attempt | ✓ | ✓ |
+| `passkey_failed` | Failed passkey attempt | ✓ | ✓ |
+| `banned` | Attempt rejected because of an active ban | ✓ | ✓ |
+| `login_successful` | Successful authentication step (1FA, TOTP, WebAuthn, …) | – | ✓ |
+| `ban_created` | New user or IP ban | – | ✓ |
 
-Each event carries a `count` attribute with the number of new occurrences. Authelia's metrics contain no usernames or IP addresses, so the event does not either.
+**Without agent**, each event carries `count` (new occurrences since the last poll).
+**With agent**, one event is fired per log entry with `username`, `remote_ip`, `auth_type`, `time` and `method`; `ban_created` carries `kind` (`user`/`ip`), `subject`, `expires`, `permanent`, `source` and `reason`.
+
+The entity ID depends on your Home Assistant language, e.g. `event.authelia_security_event` (English) or `event.authelia_sicherheitsereignis` (German).
 
 ### Example automation
 
@@ -168,33 +230,46 @@ automation:
       - condition: template
         value_template: >
           {{ trigger.to_state.attributes.event_type in
-             ['first_factor_failed', 'second_factor_failed', 'passkey_failed', 'banned'] }}
+             ['first_factor_failed', 'second_factor_failed', 'passkey_failed', 'banned', 'ban_created'] }}
     actions:
       - action: notify.mobile_app_your_phone
         data:
           title: "Authelia"
           message: >
-            {{ trigger.to_state.attributes.count }}×
-            {{ trigger.to_state.attributes.event_type | replace('_', ' ') }}
+            {% set a = trigger.to_state.attributes %}
+            {{ a.event_type | replace('_', ' ') | capitalize }}
+            {%- if a.username is defined %}: {{ a.username }} from {{ a.remote_ip }}
+            {%- elif a.subject is defined %}: {{ a.kind }} {{ a.subject }}
+            {%- else %} ({{ a.count }}×){% endif %}
 ```
 
 ## Limitations
 
-- **Installed version**: Authelia does not expose its version through an unauthenticated endpoint. The update entity therefore requires the installed version to be entered in the options and kept up to date manually.
-- **Rolling windows** are kept in memory. After a Home Assistant restart they need time to fill up again (the 24 h window needs 24 hours). Total counters are not affected.
+- **Installed version**: Authelia does not expose its version through an unauthenticated endpoint. Without the agent, the installed version has to be entered in the options and kept up to date manually.
+- **Rolling windows** from metrics are kept in memory and need time to fill up after a Home Assistant restart. With the agent, the 24 h values come from the database instead.
+- **Agent storage backends**: the agent currently supports SQLite only.
 - **Counter resets**: Authelia's counters restart at zero when Authelia restarts. Total sensors use `total_increasing`, which Home Assistant handles automatically; rolling windows and events compensate for resets.
-- **No user or IP details**: bans, registered 2FA devices and per-user login history are stored in Authelia's database and are not part of the metrics.
+- **No user or IP details without agent**: bans, 2FA devices and login history are only available through the database agent.
 
 ## Removal
 
 1. **Settings → Devices & services → Authelia → ⋮ → Delete**
 2. Remove the repository in HACS (or delete `custom_components/authelia`) and restart Home Assistant
 3. Optionally disable `telemetry.metrics` in Authelia again
+4. If installed, remove the agent:
+
+   ```bash
+   systemctl disable --now authelia-ha-agent
+   rm -rf /opt/authelia-ha-agent /etc/authelia-ha-agent /etc/systemd/system/authelia-ha-agent.service
+   systemctl daemon-reload
+   ```
 
 ## Troubleshooting
 
 - **"Telemetry endpoint not reachable"**: check that `telemetry.metrics.enabled` is `true`, Authelia was restarted, and no firewall blocks the telemetry port.
 - **"Provides no Authelia metrics"**: the configured port answers but is not Authelia's telemetry endpoint.
+- **"Token rejected by the agent"**: compare with `grep AGENT_TOKEN /etc/authelia-ha-agent/agent.env`.
+- **Agent reports a database error**: check `journalctl -u authelia-ha-agent` and the `AUTHELIA_DB` path.
 - **Diagnostics**: Settings → Devices & services → Authelia → ⋮ → Download diagnostics (the host is redacted).
 - **Debug logging**:
 
@@ -209,11 +284,11 @@ automation:
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements_test.txt ruff
-ruff check custom_components tests
+ruff check custom_components tests agent
 pytest -q
 ```
 
-Tests run against `pytest-homeassistant-custom-component` and use a real metrics output of Authelia 4.39.27 as fixture (`tests/fixtures/`).
+Tests run against `pytest-homeassistant-custom-component` and use a real metrics output of Authelia 4.39.27 as fixture (`tests/fixtures/`). Agent tests use the real storage schema (migration 29) in `tests/agent/`.
 
 ### Releasing
 

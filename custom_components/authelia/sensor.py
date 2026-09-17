@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,9 +19,12 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from . import AutheliaConfigEntry
 from .coordinator import (
+    AgentData,
+    AutheliaAgentCoordinator,
     AutheliaHealthCoordinator,
     AutheliaMetricsCoordinator,
     AutheliaReleaseCoordinator,
@@ -36,7 +40,13 @@ DIAG = EntityCategory.DIAGNOSTIC
 
 @dataclass(frozen=True, kw_only=True)
 class AutheliaSensorDescription(SensorEntityDescription):
-    """Beschreibt einen Metrics-Sensor; ``key`` = Schlüssel in MetricsData.values."""
+    """Beschreibt einen Metrics-Sensor; ``key`` = Schlüssel in MetricsData.values.
+
+    ``agent_value`` liefert – falls der Agent eingerichtet ist – einen Wert aus
+    der Datenbank, der den Metrics-Wert ersetzt (übersteht HA-Neustarts).
+    """
+
+    agent_value: Callable[[AgentData], Any] | None = None
 
 
 def _d(key: str, **kw: Any) -> AutheliaSensorDescription:
@@ -56,9 +66,12 @@ METRIC_SENSORS: tuple[AutheliaSensorDescription, ...] = (
     # Anmeldungen – Fenster (Default an)
     _d("failed_logins_5m", state_class=MEAS, icon="mdi:account-alert"),
     _d("failed_logins_1h", state_class=MEAS, icon="mdi:account-alert"),
-    _d("failed_logins_24h", state_class=MEAS, icon="mdi:account-alert"),
-    _d("successful_logins_24h", state_class=MEAS, icon="mdi:account-check"),
-    _d("banned_attempts_24h", state_class=MEAS, icon="mdi:account-cancel"),
+    _d("failed_logins_24h", state_class=MEAS, icon="mdi:account-alert",
+       agent_value=lambda a: a.last_24h.get("failed") if a.logins.get("supported") else None),
+    _d("successful_logins_24h", state_class=MEAS, icon="mdi:account-check",
+       agent_value=lambda a: a.logins_24h()),
+    _d("banned_attempts_24h", state_class=MEAS, icon="mdi:account-cancel",
+       agent_value=lambda a: a.last_24h.get("banned") if a.logins.get("supported") else None),
     _d("authz_denied_1h", state_class=MEAS, icon="mdi:shield-lock"),
     # 1FA
     _d("authn_success_total", state_class=TOTAL, icon="mdi:login"),
@@ -128,8 +141,10 @@ async def async_setup_entry(
 ) -> None:
     data = entry.runtime_data
     entities: list[SensorEntity] = [
-        AutheliaMetricSensor(data.metrics, entry, desc) for desc in METRIC_SENSORS
+        AutheliaMetricSensor(data.metrics, entry, desc, data.agent) for desc in METRIC_SENSORS
     ]
+    if data.agent is not None:
+        entities.extend(AutheliaAgentSensor(data.agent, entry, desc) for desc in AGENT_SENSORS)
     entities.append(AutheliaHealthLatencySensor(data.health, entry))
     entities.append(AutheliaLatestVersionSensor(data.release, entry))
     async_add_entities(entities)
@@ -143,13 +158,34 @@ class AutheliaMetricSensor(AutheliaEntity[AutheliaMetricsCoordinator], SensorEnt
         coordinator: AutheliaMetricsCoordinator,
         entry: AutheliaConfigEntry,
         description: AutheliaSensorDescription,
+        agent: AutheliaAgentCoordinator | None = None,
     ) -> None:
         super().__init__(coordinator, entry, description.key)
         self.entity_description = description
+        self._agent = agent if description.agent_value else None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if self._agent is not None:
+            self.async_on_remove(self._agent.async_add_listener(self._handle_coordinator_update))
+
+    def _agent_value(self) -> Any:
+        agent = self._agent
+        if agent is None or not agent.last_update_success or agent.data is None:
+            return None
+        return self.entity_description.agent_value(agent.data)  # type: ignore[misc]
 
     @property
     def native_value(self) -> Any:
+        if (value := self._agent_value()) is not None:
+            return value
         return self.coordinator.data.values.get(self.entity_description.key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if self._agent is None:
+            return None
+        return {"source": "database" if self._agent_value() is not None else "metrics"}
 
 
 class AutheliaHealthLatencySensor(AutheliaEntity[AutheliaHealthCoordinator], SensorEntity):
@@ -188,3 +224,171 @@ class AutheliaLatestVersionSensor(AutheliaEntity[AutheliaReleaseCoordinator], Se
         return {"release_url": rel.url, "published_at": rel.published_at}
 
 
+
+
+# --------------------------------------------------------------------------- #
+# Agent-Sensoren (Authelia-Datenbank)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, kw_only=True)
+class AutheliaAgentSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[AgentData], Any]
+    attrs_fn: Callable[[AgentData], dict[str, Any] | None] | None = None
+
+
+def _ts(value: str | None) -> Any:
+    return dt_util.parse_datetime(value) if value else None
+
+
+def _login_attrs(entry: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not entry:
+        return None
+    return {
+        "username": entry.get("username"),
+        "remote_ip": entry.get("remote_ip"),
+        "auth_type": entry.get("auth_type"),
+    }
+
+
+def _ban_list(items: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    return {
+        "bans": [
+            {
+                key: b.get(key),
+                "since": b.get("since"),
+                "expires": b.get("expires"),
+                "permanent": b.get("permanent"),
+                "source": b.get("source"),
+                "reason": b.get("reason"),
+            }
+            for b in items
+        ]
+    }
+
+
+def _webauthn(a: AgentData) -> list[dict[str, Any]]:
+    return a.second_factor.get("webauthn") or []
+
+
+AGENT_SENSORS: tuple[AutheliaAgentSensorDescription, ...] = (
+    AutheliaAgentSensorDescription(
+        key="active_banned_users",
+        translation_key="active_banned_users",
+        icon="mdi:account-lock",
+        state_class=MEAS,
+        value_fn=lambda a: len(a.bans.get("users") or []) if a.bans.get("supported") else None,
+        attrs_fn=lambda a: _ban_list(a.bans.get("users") or [], "username"),
+    ),
+    AutheliaAgentSensorDescription(
+        key="active_banned_ips",
+        translation_key="active_banned_ips",
+        icon="mdi:ip-network-outline",
+        state_class=MEAS,
+        value_fn=lambda a: len(a.bans.get("ips") or []) if a.bans.get("supported") else None,
+        attrs_fn=lambda a: _ban_list(a.bans.get("ips") or [], "ip"),
+    ),
+    AutheliaAgentSensorDescription(
+        key="last_successful_login",
+        translation_key="last_successful_login",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda a: _ts((a.logins.get("last_successful") or {}).get("time")),
+        attrs_fn=lambda a: _login_attrs(a.logins.get("last_successful")),
+    ),
+    AutheliaAgentSensorDescription(
+        key="last_failed_login",
+        translation_key="last_failed_login",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda a: _ts((a.logins.get("last_failed") or {}).get("time")),
+        attrs_fn=lambda a: _login_attrs(a.logins.get("last_failed")),
+    ),
+    AutheliaAgentSensorDescription(
+        key="unique_failed_ips_24h",
+        translation_key="unique_failed_ips_24h",
+        icon="mdi:ip-network",
+        state_class=MEAS,
+        value_fn=lambda a: a.last_24h.get("unique_failed_ips"),
+    ),
+    AutheliaAgentSensorDescription(
+        key="unique_failed_users_24h",
+        translation_key="unique_failed_users_24h",
+        icon="mdi:account-multiple-remove",
+        state_class=MEAS,
+        entity_registry_enabled_default=False,
+        value_fn=lambda a: a.last_24h.get("unique_failed_users"),
+    ),
+    AutheliaAgentSensorDescription(
+        key="totp_users",
+        translation_key="totp_users",
+        icon="mdi:cellphone-key",
+        state_class=MEAS,
+        value_fn=lambda a: len(a.second_factor.get("totp") or []),
+        attrs_fn=lambda a: {
+            "users": [
+                {"username": t.get("username"), "created_at": t.get("created_at"),
+                 "last_used_at": t.get("last_used_at")}
+                for t in a.second_factor.get("totp") or []
+            ]
+        },
+    ),
+    AutheliaAgentSensorDescription(
+        key="webauthn_credentials",
+        translation_key="webauthn_credentials",
+        icon="mdi:usb-flash-drive",
+        state_class=MEAS,
+        value_fn=lambda a: len(_webauthn(a)),
+        attrs_fn=lambda a: {
+            "credentials": [
+                {k: c.get(k) for k in ("username", "description", "passkey", "created_at",
+                                        "last_used_at", "backup_state", "clone_warning")}
+                for c in _webauthn(a)
+            ]
+        },
+    ),
+    AutheliaAgentSensorDescription(
+        key="passkeys",
+        translation_key="passkeys",
+        icon="mdi:key-variant",
+        state_class=MEAS,
+        entity_registry_enabled_default=False,
+        value_fn=lambda a: sum(1 for c in _webauthn(a) if c.get("passkey")),
+    ),
+    AutheliaAgentSensorDescription(
+        key="authelia_version",
+        translation_key="authelia_version",
+        icon="mdi:tag-check",
+        entity_category=DIAG,
+        value_fn=lambda a: a.authelia_version,
+    ),
+    AutheliaAgentSensorDescription(
+        key="schema_version",
+        translation_key="schema_version",
+        icon="mdi:database-cog",
+        entity_category=DIAG,
+        entity_registry_enabled_default=False,
+        value_fn=lambda a: (a.summary.get("schema") or {}).get("version"),
+    ),
+)
+
+
+class AutheliaAgentSensor(AutheliaEntity[AutheliaAgentCoordinator], SensorEntity):
+    entity_description: AutheliaAgentSensorDescription
+
+    def __init__(
+        self,
+        coordinator: AutheliaAgentCoordinator,
+        entry: AutheliaConfigEntry,
+        description: AutheliaAgentSensorDescription,
+    ) -> None:
+        super().__init__(coordinator, entry, description.key)
+        self.entity_description = description
+
+    @property
+    def native_value(self) -> Any:
+        return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if self.entity_description.attrs_fn is None:
+            return None
+        return self.entity_description.attrs_fn(self.coordinator.data)

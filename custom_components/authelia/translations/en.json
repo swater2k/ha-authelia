@@ -56,13 +56,24 @@
         "title": "Authelia options",
         "data": {
           "scan_interval": "Polling interval",
-          "installed_version": "Installed Authelia version"
+          "installed_version": "Installed Authelia version",
+          "agent_url": "Agent URL",
+          "agent_token": "Agent token"
         },
         "data_description": {
           "scan_interval": "For metrics and health check.",
-          "installed_version": "e.g. 4.39.27 – enables the update entity. Authelia does not expose its version via API."
+          "installed_version": "Only needed without agent, e.g. 4.39.27. Enables the update entity.",
+          "agent_url": "Optional. URL of the Authelia HA Agent, e.g. http://192.168.1.10:9960. Adds bans, login history with user and IP, and 2FA devices.",
+          "agent_token": "Token printed by the agent installer."
         }
       }
+    },
+    "error": {
+      "agent_unreachable": "Agent not reachable.",
+      "agent_auth": "Token rejected by the agent.",
+      "agent_invalid": "Unexpected response (wrong URL, incompatible agent version or database error).",
+      "agent_token_missing": "Token required when an agent URL is set.",
+      "unknown": "Unexpected error"
     }
   },
   "entity": {
@@ -183,6 +194,39 @@
       },
       "latest_version": {
         "name": "Latest version"
+      },
+      "active_banned_users": {
+        "name": "Active user bans"
+      },
+      "active_banned_ips": {
+        "name": "Active IP bans"
+      },
+      "last_successful_login": {
+        "name": "Last successful login"
+      },
+      "last_failed_login": {
+        "name": "Last failed login"
+      },
+      "unique_failed_ips_24h": {
+        "name": "IPs with failed logins (24 h)"
+      },
+      "unique_failed_users_24h": {
+        "name": "Users with failed logins (24 h)"
+      },
+      "totp_users": {
+        "name": "Users with TOTP"
+      },
+      "webauthn_credentials": {
+        "name": "WebAuthn credentials"
+      },
+      "passkeys": {
+        "name": "Passkeys"
+      },
+      "authelia_version": {
+        "name": "Authelia version"
+      },
+      "schema_version": {
+        "name": "Database schema version"
       }
     },
     "binary_sensor": {
@@ -194,6 +238,15 @@
       },
       "metrics_ok": {
         "name": "Telemetry"
+      },
+      "agent_ok": {
+        "name": "Database agent"
+      },
+      "ban_active": {
+        "name": "Ban active"
+      },
+      "webauthn_clone_warning": {
+        "name": "WebAuthn clone warning"
       }
     },
     "event": {
@@ -205,7 +258,9 @@
               "first_factor_failed": "First factor failed",
               "second_factor_failed": "Second factor failed",
               "passkey_failed": "Passkey failed",
-              "banned": "Attempt banned"
+              "banned": "Attempt banned",
+              "login_successful": "Login successful",
+              "ban_created": "Ban created"
             }
           }
         }

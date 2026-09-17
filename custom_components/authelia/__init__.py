@@ -9,8 +9,11 @@ from homeassistant.const import CONF_HOST, CONF_SSL, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import AutheliaClient
+from .api import AutheliaAgentClient, AutheliaClient
 from .const import (
+    AGENT_API_VERSION,
+    CONF_AGENT_TOKEN,
+    CONF_AGENT_URL,
     CONF_METRICS_PORT,
     CONF_SCAN_INTERVAL,
     CONF_SERVER_PORT,
@@ -19,6 +22,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
 )
 from .coordinator import (
+    AutheliaAgentCoordinator,
     AutheliaHealthCoordinator,
     AutheliaMetricsCoordinator,
     AutheliaReleaseCoordinator,
@@ -38,6 +42,7 @@ class AutheliaRuntimeData:
     metrics: AutheliaMetricsCoordinator
     health: AutheliaHealthCoordinator
     release: AutheliaReleaseCoordinator
+    agent: AutheliaAgentCoordinator | None = None
 
 
 type AutheliaConfigEntry = ConfigEntry[AutheliaRuntimeData]
@@ -73,7 +78,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutheliaConfigEntry) -> 
     await health.async_config_entry_first_refresh()
     await release.async_refresh()
 
-    entry.runtime_data = AutheliaRuntimeData(client, metrics, health, release)
+    agent: AutheliaAgentCoordinator | None = None
+    if (agent_url := entry.options.get(CONF_AGENT_URL)) and entry.options.get(CONF_AGENT_TOKEN):
+        agent_client = AutheliaAgentClient(
+            async_get_clientsession(hass, verify_ssl=entry.data.get(CONF_VERIFY_SSL, True)),
+            agent_url,
+            entry.options[CONF_AGENT_TOKEN],
+            verify_ssl=entry.data.get(CONF_VERIFY_SSL, True),
+            api_version=AGENT_API_VERSION,
+        )
+        agent = AutheliaAgentCoordinator(hass, entry, agent_client, interval)
+        # Agent ist optional: ein Ausfall blockiert die Metrics-Entitäten nicht.
+        await agent.async_refresh()
+
+    entry.runtime_data = AutheliaRuntimeData(client, metrics, health, release, agent)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

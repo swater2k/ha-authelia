@@ -13,6 +13,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
+    AutheliaAgentAuthError,
+    AutheliaAgentClient,
     AutheliaClient,
     AutheliaConnectionError,
     AutheliaError,
@@ -21,8 +23,10 @@ from .api import (
 )
 from .const import (
     DOMAIN,
+    EVENT_BAN_CREATED,
     EVENT_BANNED,
     EVENT_FIRST_FACTOR_FAILED,
+    EVENT_LOGIN_SUCCESSFUL,
     EVENT_PASSKEY_FAILED,
     EVENT_SECOND_FACTOR_FAILED,
     RELEASE_INTERVAL,
@@ -254,3 +258,153 @@ class AutheliaReleaseCoordinator(DataUpdateCoordinator[ReleaseInfo]):
             return await self.client.fetch_latest_release()
         except AutheliaError as err:
             raise UpdateFailed(str(err)) from err
+
+
+# --------------------------------------------------------------------------- #
+# Agent (Authelia-Datenbank)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(slots=True)
+class AgentEvent:
+    event_type: str
+    data: dict[str, Any]
+
+
+@dataclass(slots=True)
+class AgentData:
+    summary: dict[str, Any]
+    events: list[AgentEvent]
+    fetched_at: datetime
+
+    # -- bequeme Zugriffe --------------------------------------------------- #
+
+    @property
+    def logins(self) -> dict[str, Any]:
+        return self.summary.get("logins") or {}
+
+    @property
+    def bans(self) -> dict[str, Any]:
+        return self.summary.get("bans") or {}
+
+    @property
+    def second_factor(self) -> dict[str, Any]:
+        return self.summary.get("second_factor") or {}
+
+    @property
+    def authelia_version(self) -> str | None:
+        return self.summary.get("authelia_version")
+
+    @property
+    def last_24h(self) -> dict[str, Any]:
+        return self.logins.get("last_24h") or {}
+
+    def logins_24h(self) -> int | None:
+        """Vollständige Anmeldungen: erfolgreiche 1FA- bzw. Passkey-Einträge."""
+        if not self.logins.get("supported"):
+            return None
+        total = 0
+        for auth_type, counts in (self.last_24h.get("by_type") or {}).items():
+            kind = str(auth_type).lower()
+            if kind == "1fa" or "passkey" in kind:
+                total += int(counts.get("successful", 0))
+        return total
+
+
+def classify_login(row: dict[str, Any]) -> str:
+    """Ordnet einen authentication_logs-Eintrag einem Event-Typ zu."""
+    kind = str(row.get("auth_type") or "").lower()
+    if row.get("successful"):
+        return EVENT_LOGIN_SUCCESSFUL
+    if row.get("banned"):
+        return EVENT_BANNED
+    if kind == "1fa":
+        return EVENT_FIRST_FACTOR_FAILED
+    if "passkey" in kind:
+        return EVENT_PASSKEY_FAILED
+    return EVENT_SECOND_FACTOR_FAILED
+
+
+class AutheliaAgentCoordinator(DataUpdateCoordinator[AgentData]):
+    """Pollt den Agent und leitet neue Log-Einträge und Sperren als Events ab."""
+
+    config_entry: ConfigEntry
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        client: AutheliaAgentClient,
+        interval: int,
+    ) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            config_entry=entry,
+            name=f"{DOMAIN}_agent",
+            update_interval=timedelta(seconds=interval),
+        )
+        self.client = client
+        self._since_id: int | None = None
+        self._known_bans: set[str] | None = None
+
+    async def _async_update_data(self) -> AgentData:
+        try:
+            summary = await self.client.fetch_summary(self._since_id)
+        except AutheliaAgentAuthError as err:
+            raise UpdateFailed(f"{err} – Token in den Optionen prüfen") from err
+        except AutheliaError as err:
+            raise UpdateFailed(str(err)) from err
+        return self._process(summary)
+
+    def _process(self, summary: dict[str, Any]) -> AgentData:
+        events: list[AgentEvent] = []
+        logins = summary.get("logins") or {}
+        latest_id = logins.get("latest_id")
+
+        if self._since_id is not None and latest_id is not None:
+            if latest_id < self._since_id:
+                _LOGGER.info("Authelia-Log-IDs zurückgesetzt, setze Basis neu")
+            else:
+                for row in logins.get("events") or []:
+                    events.append(
+                        AgentEvent(
+                            classify_login(row),
+                            {
+                                "username": row.get("username"),
+                                "remote_ip": row.get("remote_ip"),
+                                "auth_type": row.get("auth_type"),
+                                "time": row.get("time"),
+                                "method": row.get("request_method"),
+                            },
+                        )
+                    )
+                if logins.get("events_truncated"):
+                    _LOGGER.warning("Mehr neue Anmeldeeinträge als pro Abruf übertragen")
+        if latest_id is not None:
+            self._since_id = latest_id
+
+        bans = summary.get("bans") or {}
+        current: dict[str, dict[str, Any]] = {}
+        for kind, key in (("user", "users"), ("ip", "ips")):
+            for ban in bans.get(key) or []:
+                current[f"{kind}:{ban.get('id')}"] = {"kind": kind, **ban}
+        if self._known_bans is not None:
+            for ban_key, ban in current.items():
+                if ban_key not in self._known_bans:
+                    events.append(
+                        AgentEvent(
+                            EVENT_BAN_CREATED,
+                            {
+                                "kind": ban["kind"],
+                                "subject": ban.get("username") or ban.get("ip"),
+                                "expires": ban.get("expires"),
+                                "permanent": ban.get("permanent"),
+                                "source": ban.get("source"),
+                                "reason": ban.get("reason"),
+                            },
+                        )
+                    )
+        self._known_bans = set(current)
+
+        return AgentData(summary=summary, events=events, fetched_at=datetime.now(UTC))

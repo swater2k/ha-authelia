@@ -19,12 +19,25 @@ from homeassistant.helpers.selector import (
     NumberSelectorConfig,
     NumberSelectorMode,
     TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 import voluptuous as vol
 
 from . import build_urls
-from .api import AutheliaClient, AutheliaConnectionError, AutheliaMetricsError, HealthState
+from .api import (
+    AutheliaAgentAuthError,
+    AutheliaAgentClient,
+    AutheliaAgentError,
+    AutheliaClient,
+    AutheliaConnectionError,
+    AutheliaMetricsError,
+    HealthState,
+)
 from .const import (
+    AGENT_API_VERSION,
+    CONF_AGENT_TOKEN,
+    CONF_AGENT_URL,
     CONF_INSTALLED_VERSION,
     CONF_METRICS_PORT,
     CONF_SCAN_INTERVAL,
@@ -90,6 +103,30 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     return {}
 
 
+async def validate_agent(
+    hass: HomeAssistant, url: str, token: str, verify_ssl: bool
+) -> dict[str, str]:
+    client = AutheliaAgentClient(
+        async_get_clientsession(hass, verify_ssl=verify_ssl),
+        url,
+        token,
+        verify_ssl=verify_ssl,
+        api_version=AGENT_API_VERSION,
+    )
+    try:
+        await client.fetch_summary()
+    except AutheliaAgentAuthError:
+        return {CONF_AGENT_TOKEN: "agent_auth"}
+    except AutheliaConnectionError:
+        return {CONF_AGENT_URL: "agent_unreachable"}
+    except AutheliaAgentError:
+        return {CONF_AGENT_URL: "agent_invalid"}
+    except Exception:
+        _LOGGER.exception("Unerwarteter Fehler bei der Agent-Validierung")
+        return {"base": "unknown"}
+    return {}
+
+
 class AutheliaConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
@@ -130,13 +167,34 @@ class AutheliaConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class AutheliaOptionsFlow(OptionsFlowWithReload):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        opts = dict(self.config_entry.options)
         if user_input is not None:
-            user_input[CONF_SCAN_INTERVAL] = int(user_input[CONF_SCAN_INTERVAL])
-            user_input[CONF_INSTALLED_VERSION] = (
-                (user_input.get(CONF_INSTALLED_VERSION) or "").strip().removeprefix("v")
-            )
-            return self.async_create_entry(data=user_input)
-        opts = self.config_entry.options
+            data = {
+                CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+                CONF_INSTALLED_VERSION: (user_input.get(CONF_INSTALLED_VERSION) or "")
+                .strip()
+                .removeprefix("v"),
+                CONF_AGENT_URL: (user_input.get(CONF_AGENT_URL) or "").strip().rstrip("/"),
+                CONF_AGENT_TOKEN: (user_input.get(CONF_AGENT_TOKEN) or "").strip(),
+            }
+            if data[CONF_AGENT_URL] and not data[CONF_AGENT_URL].startswith(("http://", "https://")):
+                data[CONF_AGENT_URL] = f"http://{data[CONF_AGENT_URL]}"
+            if data[CONF_AGENT_URL] and not data[CONF_AGENT_TOKEN]:
+                errors[CONF_AGENT_TOKEN] = "agent_token_missing"
+            elif data[CONF_AGENT_URL]:
+                errors = await validate_agent(
+                    self.hass,
+                    data[CONF_AGENT_URL],
+                    data[CONF_AGENT_TOKEN],
+                    self.config_entry.data.get(CONF_VERIFY_SSL, True),
+                )
+            else:
+                data[CONF_AGENT_TOKEN] = ""
+            if not errors:
+                return self.async_create_entry(data=data)
+            opts = {**opts, **data}
+
         schema = vol.Schema(
             {
                 vol.Required(
@@ -151,9 +209,17 @@ class AutheliaOptionsFlow(OptionsFlowWithReload):
                     )
                 ),
                 vol.Optional(
+                    CONF_AGENT_URL,
+                    description={"suggested_value": opts.get(CONF_AGENT_URL, "")},
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
+                vol.Optional(
+                    CONF_AGENT_TOKEN,
+                    description={"suggested_value": opts.get(CONF_AGENT_TOKEN, "")},
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                vol.Optional(
                     CONF_INSTALLED_VERSION,
                     description={"suggested_value": opts.get(CONF_INSTALLED_VERSION, "")},
                 ): TextSelector(),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

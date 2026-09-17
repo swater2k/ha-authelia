@@ -9,7 +9,11 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import AutheliaConfigEntry
 from .api import HealthState
-from .coordinator import AutheliaHealthCoordinator, AutheliaMetricsCoordinator
+from .coordinator import (
+    AutheliaAgentCoordinator,
+    AutheliaHealthCoordinator,
+    AutheliaMetricsCoordinator,
+)
 from .entity import AutheliaEntity
 
 PARALLEL_UPDATES = 0
@@ -27,6 +31,14 @@ async def async_setup_entry(
     ]
     if data.health.data.verbose_available:
         entities.append(AutheliaReadinessSensor(data.health, entry))
+    if data.agent is not None:
+        entities.extend(
+            [
+                AutheliaAgentReachableSensor(data.agent, entry),
+                AutheliaBanActiveSensor(data.agent, entry),
+                AutheliaCloneWarningSensor(data.agent, entry),
+            ]
+        )
     async_add_entities(entities)
 
 
@@ -80,3 +92,66 @@ class AutheliaMetricsSensor(AutheliaEntity[AutheliaMetricsCoordinator], BinarySe
     @property
     def is_on(self) -> bool:
         return self.coordinator.last_update_success
+
+
+class AutheliaAgentReachableSensor(AutheliaEntity[AutheliaAgentCoordinator], BinarySensorEntity):
+    """Ob der Datenbank-Agent antwortet."""
+
+    _attr_translation_key = "agent_ok"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: AutheliaAgentCoordinator, entry: AutheliaConfigEntry) -> None:
+        super().__init__(coordinator, entry, "agent_ok")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.last_update_success
+
+
+class AutheliaBanActiveSensor(AutheliaEntity[AutheliaAgentCoordinator], BinarySensorEntity):
+    """An, solange mindestens eine Benutzer- oder IP-Sperre aktiv ist."""
+
+    _attr_translation_key = "ban_active"
+    _attr_icon = "mdi:lock-alert"
+
+    def __init__(self, coordinator: AutheliaAgentCoordinator, entry: AutheliaConfigEntry) -> None:
+        super().__init__(coordinator, entry, "ban_active")
+
+    @property
+    def is_on(self) -> bool | None:
+        bans = self.coordinator.data.bans
+        if not bans.get("supported"):
+            return None
+        return bool(bans.get("users") or bans.get("ips"))
+
+
+class AutheliaCloneWarningSensor(AutheliaEntity[AutheliaAgentCoordinator], BinarySensorEntity):
+    """WebAuthn-Klonwarnung: Signaturzähler eines Sicherheitsschlüssels ist inkonsistent."""
+
+    _attr_translation_key = "webauthn_clone_warning"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, coordinator: AutheliaAgentCoordinator, entry: AutheliaConfigEntry) -> None:
+        super().__init__(coordinator, entry, "webauthn_clone_warning")
+
+    def _affected(self) -> list[dict]:
+        creds = self.coordinator.data.second_factor.get("webauthn") or []
+        return [c for c in creds if c.get("clone_warning")]
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._affected())
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "credentials": [
+                {"username": c.get("username"), "description": c.get("description")}
+                for c in self._affected()
+            ]
+        }

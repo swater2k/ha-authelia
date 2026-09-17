@@ -30,6 +30,14 @@ class AutheliaMetricsError(AutheliaError):
     """Metrics-Endpoint antwortet, liefert aber keine Authelia-Metriken."""
 
 
+class AutheliaAgentAuthError(AutheliaError):
+    """Agent lehnt das Token ab."""
+
+
+class AutheliaAgentError(AutheliaError):
+    """Agent antwortet unerwartet (falsche API-Version, DB-Fehler, ...)."""
+
+
 class HealthState(StrEnum):
     OK = "ok"
     UNHEALTHY = "unhealthy"  # z. B. 503 bei /api/health/verbose
@@ -161,3 +169,54 @@ class AutheliaClient:
             published_at=str(data.get("published_at", "")),
             body=str(data.get("body") or ""),
         )
+
+
+class AutheliaAgentClient:
+    """Client für den Authelia HA Agent (read-only Datenbank-Bridge)."""
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        token: str,
+        *,
+        verify_ssl: bool = True,
+        timeout: float = DEFAULT_TIMEOUT,
+        api_version: int = 1,
+    ) -> None:
+        self._session = session
+        self.url = url.rstrip("/")
+        self._token = token
+        self._ssl: bool | None = None if verify_ssl else False
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._api_version = api_version
+
+    async def fetch_summary(self, since_id: int | None = None) -> dict:
+        params = {} if since_id is None else {"since_id": str(since_id)}
+        headers = {"Authorization": f"Bearer {self._token}"}
+        try:
+            async with self._session.get(
+                f"{self.url}/api/v1/summary",
+                params=params,
+                headers=headers,
+                ssl=self._ssl,
+                timeout=self._timeout,
+            ) as resp:
+                if resp.status == 401:
+                    raise AutheliaAgentAuthError("Agent-Token abgelehnt")
+                if resp.status == 503:
+                    detail = (await resp.json(content_type=None)).get("detail", "")
+                    raise AutheliaAgentError(f"Agent meldet Datenbankfehler: {detail}")
+                if resp.status != 200:
+                    raise AutheliaAgentError(f"Agent antwortet mit HTTP {resp.status}")
+                data = await resp.json(content_type=None)
+        except AutheliaError:
+            raise
+        except (TimeoutError, aiohttp.ClientError) as err:
+            raise AutheliaConnectionError(f"Agent nicht erreichbar ({self.url}): {err}") from err
+        except ValueError as err:
+            raise AutheliaAgentError("Agent liefert kein JSON") from err
+        if not isinstance(data, dict) or data.get("api_version") != self._api_version:
+            found = data.get("api_version") if isinstance(data, dict) else "?"
+            raise AutheliaAgentError(f"Inkompatible Agent-API-Version: {found}")
+        return data

@@ -79,4 +79,9 @@ async def test_options(hass: HomeAssistant, mock_authelia, config_entry) -> None
         result["flow_id"], {"scan_interval": 60, "installed_version": " v4.39.26 "}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert config_entry.options == {"scan_interval": 60, "installed_version": "4.39.26"}
+    assert config_entry.options == {
+        "scan_interval": 60,
+        "installed_version": "4.39.26",
+        "agent_url": "",
+        "agent_token": "",
+    }

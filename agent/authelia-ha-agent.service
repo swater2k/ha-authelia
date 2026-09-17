@@ -1,0 +1,26 @@
+[Unit]
+Description=Authelia HA Agent (read-only data bridge for Home Assistant)
+Documentation=https://github.com/swater2k/ha-authelia
+After=network-online.target authelia.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/authelia-ha-agent/agent.env
+ExecStart=/usr/bin/python3 /opt/authelia-ha-agent/authelia_ha_agent.py
+Restart=on-failure
+RestartSec=5
+
+# Hardening – the database is only opened read-only (mode=ro, query_only).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

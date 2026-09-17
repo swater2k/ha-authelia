@@ -56,13 +56,24 @@
         "title": "Authelia-Optionen",
         "data": {
           "scan_interval": "Abfrageintervall",
-          "installed_version": "Installierte Authelia-Version"
+          "installed_version": "Installierte Authelia-Version",
+          "agent_url": "Agent-URL",
+          "agent_token": "Agent-Token"
         },
         "data_description": {
           "scan_interval": "Für Metriken und Health-Check.",
-          "installed_version": "z. B. 4.39.27 – aktiviert die Update-Entity. Authelia gibt seine Version nicht per API heraus."
+          "installed_version": "Nur ohne Agent nötig, z. B. 4.39.27. Aktiviert die Update-Entity.",
+          "agent_url": "Optional. URL des Authelia HA Agent, z. B. http://192.168.1.10:9960. Ergänzt Sperren, Anmeldeverlauf mit Benutzer und IP sowie 2FA-Geräte.",
+          "agent_token": "Token aus der Ausgabe des Agent-Installers."
         }
       }
+    },
+    "error": {
+      "agent_unreachable": "Agent nicht erreichbar.",
+      "agent_auth": "Token vom Agent abgelehnt.",
+      "agent_invalid": "Unerwartete Antwort (falsche URL, inkompatible Agent-Version oder Datenbankfehler).",
+      "agent_token_missing": "Token erforderlich, wenn eine Agent-URL angegeben ist.",
+      "unknown": "Unerwarteter Fehler"
     }
   },
   "entity": {
@@ -183,6 +194,39 @@
       },
       "latest_version": {
         "name": "Neueste Version"
+      },
+      "active_banned_users": {
+        "name": "Aktive Benutzersperren"
+      },
+      "active_banned_ips": {
+        "name": "Aktive IP-Sperren"
+      },
+      "last_successful_login": {
+        "name": "Letzte erfolgreiche Anmeldung"
+      },
+      "last_failed_login": {
+        "name": "Letzte fehlgeschlagene Anmeldung"
+      },
+      "unique_failed_ips_24h": {
+        "name": "IPs mit Fehlversuchen (24 h)"
+      },
+      "unique_failed_users_24h": {
+        "name": "Benutzer mit Fehlversuchen (24 h)"
+      },
+      "totp_users": {
+        "name": "Benutzer mit TOTP"
+      },
+      "webauthn_credentials": {
+        "name": "WebAuthn-Schlüssel"
+      },
+      "passkeys": {
+        "name": "Passkeys"
+      },
+      "authelia_version": {
+        "name": "Authelia-Version"
+      },
+      "schema_version": {
+        "name": "Datenbank-Schemaversion"
       }
     },
     "binary_sensor": {
@@ -194,6 +238,15 @@
       },
       "metrics_ok": {
         "name": "Telemetry"
+      },
+      "agent_ok": {
+        "name": "Datenbank-Agent"
+      },
+      "ban_active": {
+        "name": "Sperre aktiv"
+      },
+      "webauthn_clone_warning": {
+        "name": "WebAuthn-Klonwarnung"
       }
     },
     "event": {
@@ -205,7 +258,9 @@
               "first_factor_failed": "1FA fehlgeschlagen",
               "second_factor_failed": "2FA fehlgeschlagen",
               "passkey_failed": "Passkey fehlgeschlagen",
-              "banned": "Versuch gesperrt"
+              "banned": "Versuch gesperrt",
+              "login_successful": "Anmeldung erfolgreich",
+              "ban_created": "Sperre erstellt"
             }
           }
         }

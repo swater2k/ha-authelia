@@ -12,6 +12,11 @@ CONF_METRICS_PORT: Final = "metrics_port"
 # Options
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_INSTALLED_VERSION: Final = "installed_version"
+CONF_AGENT_URL: Final = "agent_url"
+CONF_AGENT_TOKEN: Final = "agent_token"
+
+DEFAULT_AGENT_PORT: Final = 9960
+AGENT_API_VERSION: Final = 1
 
 DEFAULT_SERVER_PORT: Final = 9091
 DEFAULT_METRICS_PORT: Final = 9959
@@ -35,9 +40,14 @@ EVENT_FIRST_FACTOR_FAILED: Final = "first_factor_failed"
 EVENT_SECOND_FACTOR_FAILED: Final = "second_factor_failed"
 EVENT_PASSKEY_FAILED: Final = "passkey_failed"
 EVENT_BANNED: Final = "banned"
+# nur mit Agent (Datenbank)
+EVENT_LOGIN_SUCCESSFUL: Final = "login_successful"
+EVENT_BAN_CREATED: Final = "ban_created"
 EVENT_TYPES: Final = (
     EVENT_FIRST_FACTOR_FAILED,
     EVENT_SECOND_FACTOR_FAILED,
     EVENT_PASSKEY_FAILED,
     EVENT_BANNED,
+    EVENT_LOGIN_SUCCESSFUL,
+    EVENT_BAN_CREATED,
 )
