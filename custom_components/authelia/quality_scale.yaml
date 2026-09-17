@@ -17,7 +17,7 @@ rules:
   docs-actions:
     status: exempt
     comment: Keine Service-Actions.
-  brands: todo
+  brands: done
   docs-high-level-description: todo
   docs-installation-instructions: todo
   docs-removal-instructions: todo
