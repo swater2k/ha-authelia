@@ -93,3 +93,35 @@ async def test_diagnostics(hass: HomeAssistant, mock_authelia, config_entry) -> 
     diag = await async_get_config_entry_diagnostics(hass, config_entry)
     assert diag["entry"]["data"]["host"] == "**REDACTED**"
     assert "authelia_authn" in diag["metrics"]["raw_families"]
+
+
+async def test_setup_succeeds_without_authelia_metrics(
+    hass: HomeAssistant, aioclient_mock, config_entry
+) -> None:
+    """Frisch gestartetes Authelia: Endpoint da, Zähler noch nicht."""
+    from .conftest import GITHUB_URL, HEALTH_URL, METRICS_URL, RELEASE_JSON
+
+    fresh = "# TYPE go_goroutines gauge\ngo_goroutines 21\n"
+    aioclient_mock.get(METRICS_URL, text=fresh)
+    aioclient_mock.get(HEALTH_URL, text="OK")
+    aioclient_mock.get(f"{HEALTH_URL}/verbose", status=404)
+    aioclient_mock.get(GITHUB_URL, json=RELEASE_JSON)
+
+    await _setup(hass, config_entry)
+    assert config_entry.state is ConfigEntryState.LOADED
+
+    telemetry = hass.states.get("binary_sensor.authelia_telemetry")
+    assert telemetry.state == "on"
+    assert telemetry.attributes["waiting_for_first_event"] is True
+    # Zähler stehen auf 0 statt "nicht verfügbar"
+    assert hass.states.get("sensor.authelia_first_factor_failed").state == "0.0"
+    assert hass.states.get("binary_sensor.authelia_reachable").state == "on"
+
+    # Sobald Authelia Ereignisse zählt, verschwindet der Wartezustand
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(METRICS_URL, text=REAL_METRICS)
+    await config_entry.runtime_data.metrics.async_refresh()
+    await hass.async_block_till_done()
+    telemetry = hass.states.get("binary_sensor.authelia_telemetry")
+    assert telemetry.attributes["waiting_for_first_event"] is False
+    assert hass.states.get("sensor.authelia_first_factor_failed").state == "1.0"

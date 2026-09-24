@@ -100,13 +100,21 @@ class AutheliaClient:
                 f"Metrics nicht erreichbar ({self.metrics_url}): {err}"
             ) from err
 
-    async def fetch_metrics(self) -> AutheliaMetrics:
+    async def fetch_metrics(self, *, require_authelia: bool = True) -> AutheliaMetrics:
+        """Metriken abrufen.
+
+        ``require_authelia`` trennt zwei Situationen: Bei der Einrichtung soll
+        ein falscher Port sofort auffallen. Im laufenden Betrieb ist ein
+        Endpoint ohne ``authelia_*``-Familien dagegen normal, solange Authelia
+        nach einem Neustart noch keine Anfrage verarbeitet hat – die Zähler
+        entstehen erst beim ersten Ereignis.
+        """
         text = await self.fetch_metrics_text()
         try:
             metrics = AutheliaMetrics.from_text(text)
         except MetricsParseError as err:
             raise AutheliaMetricsError(f"Antwort ist kein Prometheus-Format: {err}") from err
-        if not metrics.has_authelia_metrics:
+        if require_authelia and not metrics.has_authelia_metrics:
             raise AutheliaMetricsError(
                 "Endpoint liefert keine authelia_*-Metriken – ist es der Authelia-Telemetry-Port?"
             )

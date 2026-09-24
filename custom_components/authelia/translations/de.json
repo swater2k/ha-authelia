@@ -40,7 +40,7 @@
     },
     "error": {
       "metrics_unreachable": "Telemetry-Endpoint nicht erreichbar. Ist telemetry.metrics aktiviert und der Port von Home Assistant aus erreichbar?",
-      "metrics_invalid": "Der Endpoint antwortet, liefert aber keine Authelia-Metriken.",
+      "metrics_invalid": "Der Endpoint antwortet, liefert aber keine Authelia-Metriken. Wurde Authelia gerade neu gestartet, melde dich einmal an und versuche es erneut.",
       "server_unreachable": "Metrics OK, aber /api/health auf dem Server-Port ist nicht erreichbar.",
       "unknown": "Unerwarteter Fehler"
     },

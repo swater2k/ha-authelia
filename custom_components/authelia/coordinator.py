@@ -51,6 +51,7 @@ class MetricsData:
     fetched_at: datetime
     window_coverage: float = 0.0
     counter_resets: int = 0
+    metrics_pending: bool = False
 
 
 def _zero(value: float | None) -> float:
@@ -97,14 +98,23 @@ class AutheliaMetricsCoordinator(DataUpdateCoordinator[MetricsData]):
         self.client = client
         self._windows = _Windows()
         self._previous_event_counters: dict[str, float] | None = None
+        self._pending_logged = False
 
     async def _async_update_data(self) -> MetricsData:
         try:
-            metrics = await self.client.fetch_metrics()
+            # Nachsichtig: ein frisch gestartetes Authelia exponiert noch keine
+            # authelia_*-Familien. Das ist kein Grund, das Setup abzubrechen.
+            metrics = await self.client.fetch_metrics(require_authelia=False)
         except AutheliaConnectionError as err:
             raise UpdateFailed(f"Authelia-Metrics nicht erreichbar: {err}") from err
         except AutheliaError as err:
             raise UpdateFailed(str(err)) from err
+        if not metrics.has_authelia_metrics and not self._pending_logged:
+            _LOGGER.info(
+                "Telemetry-Endpoint erreichbar, aber noch ohne authelia_*-Metriken. "
+                "Authelia legt die Zähler erst beim ersten Ereignis an."
+            )
+            self._pending_logged = True
         return self._process(metrics, time.monotonic())
 
     # ------------------------------------------------------------------ #
@@ -208,6 +218,7 @@ class AutheliaMetricsCoordinator(DataUpdateCoordinator[MetricsData]):
         self._previous_event_counters = current
 
         return MetricsData(
+            metrics_pending=not m.has_authelia_metrics,
             values=v,
             events=events,
             metrics=m,

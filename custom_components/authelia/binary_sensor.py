@@ -93,6 +93,11 @@ class AutheliaMetricsSensor(AutheliaEntity[AutheliaMetricsCoordinator], BinarySe
     def is_on(self) -> bool:
         return self.coordinator.last_update_success
 
+    @property
+    def extra_state_attributes(self) -> dict[str, bool | None]:
+        data = self.coordinator.data
+        return {"waiting_for_first_event": data.metrics_pending if data else None}
+
 
 class AutheliaAgentReachableSensor(AutheliaEntity[AutheliaAgentCoordinator], BinarySensorEntity):
     """Ob der Datenbank-Agent antwortet."""

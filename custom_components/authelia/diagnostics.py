@@ -27,6 +27,7 @@ async def async_get_config_entry_diagnostics(
         },
         "metrics": {
             "last_update_success": data.metrics.last_update_success,
+            "metrics_pending": metrics.metrics_pending if metrics else None,
             "fetched_at": metrics.fetched_at.isoformat() if metrics else None,
             "window_coverage_seconds": metrics.window_coverage if metrics else None,
             "counter_resets": metrics.counter_resets if metrics else None,
