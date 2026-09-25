@@ -48,7 +48,7 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-AGENT_VERSION = "1.1.0"
+AGENT_VERSION = "1.1.1"
 API_VERSION = 1
 MAX_EVENTS = 200
 VERSION_CACHE_SECONDS = 300

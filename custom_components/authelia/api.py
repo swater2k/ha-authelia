@@ -18,6 +18,13 @@ GITHUB_LATEST_RELEASE = "https://api.github.com/repos/authelia/authelia/releases
 DEFAULT_TIMEOUT = 10
 
 
+def _describe(err: BaseException, timeout: aiohttp.ClientTimeout) -> str:
+    """Lesbare Ursache; TimeoutError hat von sich aus keinen Text."""
+    if isinstance(err, (TimeoutError, asyncio.TimeoutError)):
+        return f"Zeitüberschreitung nach {timeout.total:g} s"
+    return str(err) or type(err).__name__
+
+
 class AutheliaError(Exception):
     """Basisfehler."""
 
@@ -97,7 +104,7 @@ class AutheliaClient:
             raise
         except (TimeoutError, aiohttp.ClientError) as err:
             raise AutheliaConnectionError(
-                f"Metrics nicht erreichbar ({self.metrics_url}): {err}"
+                f"Metrics nicht erreichbar ({self.metrics_url}): {_describe(err, self._timeout)}"
             ) from err
 
     async def fetch_metrics(self, *, require_authelia: bool = True) -> AutheliaMetrics:
@@ -168,7 +175,9 @@ class AutheliaClient:
                 resp.raise_for_status()
                 data = await resp.json()
         except (TimeoutError, aiohttp.ClientError) as err:
-            raise AutheliaConnectionError(f"GitHub nicht erreichbar: {err}") from err
+            raise AutheliaConnectionError(
+                f"GitHub nicht erreichbar: {_describe(err, self._timeout)}"
+            ) from err
         tag = str(data.get("tag_name", ""))
         return ReleaseInfo(
             version=tag.removeprefix("v"),
@@ -221,7 +230,9 @@ class AutheliaAgentClient:
         except AutheliaError:
             raise
         except (TimeoutError, aiohttp.ClientError) as err:
-            raise AutheliaConnectionError(f"Agent nicht erreichbar ({self.url}): {err}") from err
+            raise AutheliaConnectionError(
+                f"Agent nicht erreichbar ({self.url}): {_describe(err, self._timeout)}"
+            ) from err
         except ValueError as err:
             raise AutheliaAgentError("Agent liefert kein JSON") from err
         if not isinstance(data, dict) or data.get("api_version") != self._api_version:

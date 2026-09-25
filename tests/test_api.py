@@ -1,5 +1,6 @@
 """Tests für AutheliaClient gegen einen lokalen aiohttp-Testserver."""
 
+import asyncio
 from pathlib import Path
 
 import aiohttp
@@ -99,3 +100,23 @@ async def test_unreachable() -> None:
         with pytest.raises(AutheliaConnectionError):
             await client.fetch_metrics()
         assert (await client.check_health()).state is HealthState.UNREACHABLE
+
+
+async def test_timeout_message_is_not_empty() -> None:
+    """Früher stand bei einer Zeitüberschreitung nur ein leerer Text im Log."""
+    from custom_components.authelia.api import AutheliaAgentClient
+
+    async def slow(_: web.Request) -> web.Response:
+        await asyncio.sleep(2)
+        return web.Response(text="{}")
+
+    app = web.Application()
+    app.router.add_get("/api/v1/summary", slow)
+    runner, base = await _start(app)
+    try:
+        async with aiohttp.ClientSession() as session:
+            client = AutheliaAgentClient(session, base, "t" * 40, timeout=0.2)
+            with pytest.raises(AutheliaConnectionError, match=r"Zeitüberschreitung nach 0\.2 s"):
+                await client.fetch_summary()
+    finally:
+        await runner.cleanup()

@@ -1,7 +1,11 @@
 [Unit]
 Description=Authelia HA Agent (read-only data bridge for Home Assistant)
 Documentation=https://github.com/swater2k/ha-authelia
-After=network-online.target authelia.service
+# Bewusst KEIN After=authelia.service: Der Agent liest nur die Datenbankdatei.
+# Manche Authelia-Units ordnen sich hinter multi-user.target ein – zusammen mit
+# After=authelia.service entsteht dann ein Zyklus, den systemd auflöst, indem
+# es den Start des Agents verwirft.
+After=network-online.target
 Wants=network-online.target
 
 [Service]
